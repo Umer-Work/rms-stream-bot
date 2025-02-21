@@ -23,6 +23,7 @@ using Microsoft.Skype.Internal.Media.Services.Common;
 using System.Runtime.InteropServices;
 using System.IO;
 using System.Text.Json;
+using System.Collections.Generic;
 
 namespace EchoBot.Bot
 {
@@ -31,12 +32,24 @@ namespace EchoBot.Bot
     /// </summary>
     public class BotMediaStream : ObjectRootDisposable
     {
+        public class UserDetails
+        {
+            public string Id { get; set; }
+            public string DisplayName { get; set; }
+            public string Email { get; set; }
+        }
+
         private AppSettings _settings;
 
         /// <summary>
         /// The participants
         /// </summary>
         internal List<IParticipant> participants;
+
+        /// <summary>
+        /// Dictionary to store user details including email
+        /// </summary>
+        internal Dictionary<string, UserDetails> userDetailsMap;
 
         /// <summary>
         /// The audio socket
@@ -61,14 +74,19 @@ namespace EchoBot.Bot
 
         private readonly object _fileLock = new object();
 
-        private string GetTodayFileName()
+        private async Task AppendToAudioTodayFile(string jsonData)
         {
-            return Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
+            var filePath = Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
+            lock (_fileLock)
+            {
+                // Ensure each JSON object is on a new line
+                File.AppendAllText(filePath, jsonData + Environment.NewLine);
+            }
         }
 
-        private async Task AppendToTodayFile(string jsonData)
+        private async Task AppendToVideoTodayFile(string jsonData)
         {
-            var filePath = GetTodayFileName();
+            var filePath = Path.Combine("rawData", $"video_data_{DateTime.Now:yyyy-MM-dd}.txt");
             lock (_fileLock)
             {
                 // Ensure each JSON object is on a new line
@@ -107,8 +125,6 @@ namespace EchoBot.Bot
 
             // Initialize participants list
             this.participants = new List<IParticipant>();
-            // Console.WriteLine($"[BotMediaStream] Initialized with empty participants list for call {callId}");
-
             this.audioSendStatusActive = new TaskCompletionSource<bool>();
             this.startVideoPlayerCompleted = new TaskCompletionSource<bool>();
 
@@ -262,10 +278,17 @@ namespace EchoBot.Bot
                     {
                         var identitySet = participant.Resource?.Info?.Identity;
                         var identity = identitySet?.User;
-                        // Console.WriteLine($"identity: {identity}");
-                        // Console.WriteLine($"Active Speaker Identity: {identity?.Id}, DisplayName: {identity?.DisplayName}");
+                        Console.WriteLine($"identity: {identity}");
+                        Console.WriteLine($"Active Speaker Identity: {identity?.Id}, DisplayName: {identity?.DisplayName}");
                         
-                        // // Save data to file
+                        // Get stored user details including email
+                        UserDetails userDetails = null;
+                        if (identity?.Id != null && userDetailsMap != null)
+                        {
+                            userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                        }
+                        
+                        // Save data to file
                         // try 
                         // {
                         //     var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
@@ -275,12 +298,13 @@ namespace EchoBot.Bot
                         //         ActiveSpeakerId = buffer.ActiveSpeakerId,
                         //         UserId = identity?.Id,
                         //         DisplayName = identity?.DisplayName,
+                        //         Email = userDetails?.Email,
                         //         AudioLength = length,
-                        //         AudioData = Convert.ToBase64String(data)
+                        //         AudioData = data  // Store raw audio data instead of Base64
                         //     };
                             
                         //     var jsonData = System.Text.Json.JsonSerializer.Serialize(info);
-                        //     await AppendToTodayFile(jsonData);
+                        //     await AppendToAudioTodayFile(jsonData);
                         // }
                         // catch (Exception ex)
                         // {
@@ -335,12 +359,60 @@ namespace EchoBot.Bot
         /// </summary>
         /// <param name="sender">The sender.</param>
         /// <param name="e">The video media received arguments.</param>
-        private void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
+        private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
         {
-            // Console.WriteLine("Here 2");
             // Console.WriteLine($"[VideoMediaReceivedEventArgs(Data=<{e.Buffer.Data.ToString()}>, Length={e.Buffer.Length}, Timestamp={e.Buffer.Timestamp}, Width={e.Buffer.VideoFormat.Width}, Height={e.Buffer.VideoFormat.Height}, ColorFormat={e.Buffer.VideoFormat.VideoColorFormat}, FrameRate={e.Buffer.VideoFormat.FrameRate} MediaSourceId={e.Buffer.MediaSourceId})]");
-            // this.mediaFrameSourceComponent.Received(e.Buffer, e.Buffer.MediaSourceId);
             // e.Buffer.Dispose();
+            // try 
+            // {
+            //     // Get participant information using MediaSourceId
+            //     var participant = _call.Participants.SingleOrDefault(x => 
+            //         x.Resource.IsInLobby == false && 
+            //         x.Resource.MediaStreams.Any(y => y.SourceId == e.Buffer.MediaSourceId.ToString()));
+
+            //     if (participant != null)
+            //     {
+            //         var identity = participant.Resource?.Info?.Identity?.User;
+                    
+            //         // Get stored user details including email
+            //         UserDetails userDetails = null;
+            //         if (identity?.Id != null && userDetailsMap != null)
+            //         {
+            //             userDetailsMap.TryGetValue(identity.Id, out userDetails);
+            //         }
+
+            //         // Copy video data from IntPtr to byte array
+            //         var length = e.Buffer.Length;
+            //         var data = new byte[length];
+            //         Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
+
+            //         var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+            //         var info = new
+            //         {
+            //             Timestamp = timestamp,
+            //             MediaSourceId = e.Buffer.MediaSourceId,
+            //             UserId = identity?.Id,
+            //             DisplayName = identity?.DisplayName,
+            //             Email = userDetails?.Email,
+            //             VideoLength = length,
+            //             VideoData = data,
+            //             Width = e.Buffer.VideoFormat.Width,
+            //             Height = e.Buffer.VideoFormat.Height
+            //         };
+
+            //         var jsonData = System.Text.Json.JsonSerializer.Serialize(info);
+            //         await AppendToVideoTodayFile(jsonData);
+            //     }
+            // }
+            // catch (Exception ex)
+            // {
+            //     Console.WriteLine($"Error saving video data: {ex.Message}");
+            //     _logger.LogError(ex, "Error saving video data");
+            // }
+            // finally
+            // {
+            //     e.Buffer.Dispose();
+            // }
         }
 
         private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)

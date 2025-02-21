@@ -1,13 +1,16 @@
-using EchoBot.Util;
+using Azure.Core;
+using Azure.Identity;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
 using Microsoft.Graph.Communications.Calls;
 using Microsoft.Graph.Communications.Calls.Media;
 using Microsoft.Graph.Communications.Common.Telemetry;
 using Microsoft.Graph.Communications.Resources;
-using Microsoft.Graph.Models;
+using EchoBot.Util;
 using System.Timers;
 using System.Collections.Generic;
 using Microsoft.Skype.Bots.Media;
+using System.Net.Http.Headers;
 
 namespace EchoBot.Bot
 {
@@ -36,6 +39,11 @@ namespace EchoBot.Bot
 
         private readonly object subscriptionLock = new object();
 
+        private readonly IGraphLogger _logger;
+        private readonly IAudioSocket _audioSocket;
+        private readonly IVideoSocket _videoSocket;
+        private readonly AppSettings _settings;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
         /// </summary>
@@ -51,6 +59,7 @@ namespace EchoBot.Bot
         {
             // Console.WriteLine($"[CallHandler] Initializing for call {statefulCall.Id}");
             this.Call = statefulCall;
+            this._settings = settings;
             
             // Subscribe to call updates first
             this.Call.OnUpdated += this.CallOnUpdated;
@@ -204,7 +213,7 @@ namespace EchoBot.Bot
         /// </summary>
         /// <param name="eventArgs">The event arguments.</param>
         /// <param name="added">if set to <c>true</c> [added].</param>
-        private void updateParticipants(ICollection<IParticipant> eventArgs, bool added = true)
+        private async void updateParticipants(ICollection<IParticipant> eventArgs, bool added = true)
         {
             // Console.WriteLine($"[CallHandler] updateParticipants called with {eventArgs.Count} participants, added={added}");
             foreach (var participant in eventArgs)
@@ -217,9 +226,44 @@ namespace EchoBot.Bot
                     // for now we want the bot to only subscribe to "real" participants
                     var participantDetails = participant?.Resource?.Info?.Identity?.User;
                     var participantId = participant?.Id;
-
+                    
                     if (participantDetails != null)
                     {
+                        // Get user details from Graph API
+                        try 
+                        {
+                            // Create credential using client credentials flow
+                            var credentials = new ClientSecretCredential(
+                                _settings.AadTenantId,  // Your tenant ID
+                                _settings.AadAppId,     // Your client/application ID
+                                _settings.AadAppSecret  // Your client secret
+                            );
+
+                            // Create GraphServiceClient with the credentials
+                            var graphServiceClient = new GraphServiceClient(credentials);
+
+                            // Get user details
+                            var user = await graphServiceClient.Users[participantDetails.Id].GetAsync();
+                            if (user != null)
+                            {
+                                Console.WriteLine($"[CallHandler] Graph API User Details: ID={user.Id}, Name={user.DisplayName}, Email={user.Mail ?? "No email"}");
+                                
+                                // Store user details in the BotMediaStream's dictionary
+                                this.BotMediaStream.userDetailsMap ??= new Dictionary<string, BotMediaStream.UserDetails>();
+                                this.BotMediaStream.userDetailsMap[participantDetails.Id] = new BotMediaStream.UserDetails
+                                {
+                                    Id = user.Id,
+                                    DisplayName = user.DisplayName,
+                                    Email = user.Mail ?? "No email"
+                                };
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[CallHandler] Error fetching user details from Graph: {ex.Message}");
+                        }
+
+                        // Continue with existing logic
                         // Console.WriteLine($"[CallHandler] Adding participant with display name: {participantDetails.DisplayName}");
                         json = updateParticipant(this.BotMediaStream.participants, participant, added, participantDetails.DisplayName);
                         

@@ -19,6 +19,13 @@ namespace EchoBot
         public string CertificateThumbprint { get; set; }
 
         /// <summary>
+        /// Gets or sets the tenant identifier.
+        /// </summary>
+        /// <value>The tenant identifier.</value>
+        [Required]
+        public string AadTenantId { get; set; }
+
+        /// <summary>
         /// Gets or sets the aad application identifier.
         /// </summary>
         /// <value>The aad application identifier.</value>
