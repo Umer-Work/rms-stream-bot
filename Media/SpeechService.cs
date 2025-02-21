@@ -42,13 +42,8 @@ namespace EchoBot.Media
             _speechConfig.SpeechSynthesisLanguage = settings.BotLanguage;
             _speechConfig.SpeechRecognitionLanguage = settings.BotLanguage;
 
-            // Enable detailed recognition logging
-            _speechConfig.SetProperty(PropertyId.SpeechServiceConnection_LogLevel, "255");
-            
-            // Set recognition mode to conversation
-            _speechConfig.SetProperty(PropertyId.SpeechServiceConnection_RecognitionMode, "Conversation");
-            
-            // Enable dictation mode
+            // Enable continuous recognition mode
+            _speechConfig.EnableAudioLogging();
             _speechConfig.EnableDictation();
 
             var audioConfig = AudioConfig.FromStreamOutput(_audioOutputStream);
@@ -76,12 +71,12 @@ namespace EchoBot.Media
                 var bufferLength = audioBuffer.Length;
                 if (bufferLength > 0)
                 {
-                    Console.WriteLine($"[AppendAudioBuffer] Received audio buffer with length: {bufferLength}");
+                    // Console.WriteLine($"[AppendAudioBuffer] Received audio buffer with length: {bufferLength}");
                     var buffer = new byte[bufferLength];
                     Marshal.Copy(audioBuffer.Data, buffer, 0, (int)bufferLength);
 
                     _audioInputStream.Write(buffer);
-                    Console.WriteLine("[AppendAudioBuffer] Successfully wrote audio data to input stream");
+                    // Console.WriteLine("[AppendAudioBuffer] Successfully wrote audio data to input stream");
                 }
             }
             catch (Exception e)

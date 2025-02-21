@@ -444,3 +444,4 @@ Source/CallingBotSample/wwwroot/temp/*
 # Ignore build directories
 bin/
 obj/
+cache/
