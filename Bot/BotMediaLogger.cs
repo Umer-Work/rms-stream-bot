@@ -43,7 +43,7 @@ namespace EchoBot.Bot
                     break;
             }
 
-            this._logger.Log(logLevel, logStatement);
+            // this._logger.Log(logLevel, logStatement);
         }
     }
 }
