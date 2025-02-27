@@ -71,7 +71,7 @@ namespace EchoBot.Bot
         private List<AudioMediaBuffer> audioMediaBuffers = new List<AudioMediaBuffer>();
         private int shutdown;
         private readonly SpeechService _languageService;
-
+        private readonly WebSocketClient _webSocketClient;
         private readonly object _fileLock = new object();
 
         private async Task AppendToAudioTodayFile(string jsonData)
@@ -122,6 +122,17 @@ namespace EchoBot.Bot
             _settings = settings;
             _logger = logger;
             _call = call;
+
+            // Initialize WebSocket client
+            string wsUrl = settings.WebSocketServerUrl;
+            // Try to get from environment variable if not in settings
+            if (string.IsNullOrEmpty(wsUrl))
+            {
+                wsUrl = Environment.GetEnvironmentVariable("WEBSOCKET_SERVER_URL") ?? "ws://localhost:3000";
+            }
+            _webSocketClient = new WebSocketClient(wsUrl, logger);
+            // Connect to WebSocket server
+            _webSocketClient.ConnectAsync().Wait();
 
             // Initialize participants list
             this.participants = new List<IParticipant>();
@@ -204,6 +215,9 @@ namespace EchoBot.Bot
             _logger.LogInformation($"disposed {this.audioMediaBuffers.Count} audioMediaBUffers.");
 
             this.audioMediaBuffers.Clear();
+
+            // Dispose WebSocket client
+            _webSocketClient?.Dispose();
         }
 
         /// <summary>
@@ -278,8 +292,8 @@ namespace EchoBot.Bot
                     {
                         var identitySet = participant.Resource?.Info?.Identity;
                         var identity = identitySet?.User;
-                        Console.WriteLine($"identity: {identity}");
-                        Console.WriteLine($"Active Speaker Identity: {identity?.Id}, DisplayName: {identity?.DisplayName}");
+                        // Console.WriteLine($"identity: {identity}");
+                        // Console.WriteLine($"Active Speaker Identity: {identity?.Id}, DisplayName: {identity?.DisplayName}");
                         
                         // Get stored user details including email
                         UserDetails userDetails = null;
@@ -288,29 +302,29 @@ namespace EchoBot.Bot
                             userDetailsMap.TryGetValue(identity.Id, out userDetails);
                         }
                         
-                        // Save data to file
-                        // try 
-                        // {
-                        //     var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-                        //     var info = new
-                        //     {
-                        //         Timestamp = timestamp,
-                        //         ActiveSpeakerId = buffer.ActiveSpeakerId,
-                        //         UserId = identity?.Id,
-                        //         DisplayName = identity?.DisplayName,
-                        //         Email = userDetails?.Email,
-                        //         AudioLength = length,
-                        //         AudioData = data  // Store raw audio data instead of Base64
-                        //     };
-                            
-                        //     var jsonData = System.Text.Json.JsonSerializer.Serialize(info);
-                        //     await AppendToAudioTodayFile(jsonData);
-                        // }
-                        // catch (Exception ex)
-                        // {
-                        //     Console.WriteLine($"Error saving data to file: {ex.Message}");
-                        //     _logger.LogError(ex, "Error saving audio data to file");
-                        // }
+                        try 
+                        {
+                            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+                            var metadata = JsonSerializer.Serialize(new
+                            {
+                                type = "audio",
+                                timestamp = timestamp,
+                                activeSpeakerId = buffer.ActiveSpeakerId,
+                                userId = identity?.Id,
+                                displayName = identity?.DisplayName,
+                                email = userDetails?.Email,
+                                length = length
+                            });
+
+                            // Send to WebSocket server
+                            await _webSocketClient.SendAudioDataAsync(data, userDetails?.Email, identity?.DisplayName);
+                            // Also save to file
+                            await AppendToAudioTodayFile(metadata);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Error processing audio data");
+                        }
                     }
                 }
             }
@@ -361,58 +375,55 @@ namespace EchoBot.Bot
         /// <param name="e">The video media received arguments.</param>
         private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
         {
-            // Console.WriteLine($"[VideoMediaReceivedEventArgs(Data=<{e.Buffer.Data.ToString()}>, Length={e.Buffer.Length}, Timestamp={e.Buffer.Timestamp}, Width={e.Buffer.VideoFormat.Width}, Height={e.Buffer.VideoFormat.Height}, ColorFormat={e.Buffer.VideoFormat.VideoColorFormat}, FrameRate={e.Buffer.VideoFormat.FrameRate} MediaSourceId={e.Buffer.MediaSourceId})]");
-            // e.Buffer.Dispose();
-            // try 
-            // {
-            //     // Get participant information using MediaSourceId
-            //     var participant = _call.Participants.SingleOrDefault(x => 
-            //         x.Resource.IsInLobby == false && 
-            //         x.Resource.MediaStreams.Any(y => y.SourceId == e.Buffer.MediaSourceId.ToString()));
-
-            //     if (participant != null)
-            //     {
-            //         var identity = participant.Resource?.Info?.Identity?.User;
+            try 
+            {
+                var participant = _call.Participants.SingleOrDefault(x => 
+                    x.Resource.IsInLobby == false && 
+                    x.Resource.MediaStreams.Any(y => y.SourceId == e.Buffer.MediaSourceId.ToString()));
+                
+                if (participant != null)
+                {
+                    var identity = participant.Resource?.Info?.Identity?.User;
                     
-            //         // Get stored user details including email
-            //         UserDetails userDetails = null;
-            //         if (identity?.Id != null && userDetailsMap != null)
-            //         {
-            //             userDetailsMap.TryGetValue(identity.Id, out userDetails);
-            //         }
+                    UserDetails userDetails = null;
+                    if (identity?.Id != null && userDetailsMap != null)
+                    {
+                        userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                    }
 
-            //         // Copy video data from IntPtr to byte array
-            //         var length = e.Buffer.Length;
-            //         var data = new byte[length];
-            //         Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
+                    var length = e.Buffer.Length;
+                    var data = new byte[length];
+                    Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
 
-            //         var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-            //         var info = new
-            //         {
-            //             Timestamp = timestamp,
-            //             MediaSourceId = e.Buffer.MediaSourceId,
-            //             UserId = identity?.Id,
-            //             DisplayName = identity?.DisplayName,
-            //             Email = userDetails?.Email,
-            //             VideoLength = length,
-            //             VideoData = data,
-            //             Width = e.Buffer.VideoFormat.Width,
-            //             Height = e.Buffer.VideoFormat.Height
-            //         };
+                    var metadata = JsonSerializer.Serialize(new
+                    {
+                        type = "video",
+                        timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
+                        mediaSourceId = e.Buffer.MediaSourceId,
+                        userId = identity?.Id,
+                        displayName = identity?.DisplayName,
+                        email = userDetails?.Email,
+                        length = length,
+                        width = e.Buffer.VideoFormat.Width,
+                        height = e.Buffer.VideoFormat.Height,
+                        frameRate = e.Buffer.VideoFormat.FrameRate
+                    });
 
-            //         var jsonData = System.Text.Json.JsonSerializer.Serialize(info);
-            //         await AppendToVideoTodayFile(jsonData);
-            //     }
-            // }
-            // catch (Exception ex)
-            // {
-            //     Console.WriteLine($"Error saving video data: {ex.Message}");
-            //     _logger.LogError(ex, "Error saving video data");
-            // }
-            // finally
-            // {
-            //     e.Buffer.Dispose();
-            // }
+                    // Send to WebSocket server
+                    await _webSocketClient.SendVideoDataAsync(data, userDetails?.Email, identity?.DisplayName);
+                    
+                    // Also save to file
+                    await AppendToVideoTodayFile(metadata);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing video data");
+            }
+            finally
+            {
+                e.Buffer.Dispose();
+            }
         }
 
         private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)

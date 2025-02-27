@@ -440,9 +440,10 @@ $RECYCLE.BIN/
 
 Source/CallingBotSample/wwwroot/temp/*
 
-cache/
+
 
 # Ignore build directories
 bin/
 obj/
 rawData/
+cache/
