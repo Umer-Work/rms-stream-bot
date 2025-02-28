@@ -1,50 +1,36 @@
 # Use the official .NET SDK image as the base image for building
-FROM mcr.microsoft.com/dotnet/sdk:6.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:6.0-windowsservercore-ltsc2022 AS build
+
+ARG CallSignalingPort=9442
+ARG CallSignalingPort2=9441
+ARG InstanceInternalPort=8445
+
+COPY . /src
+
 WORKDIR /src
 
-# Copy csproj and restore dependencies
-COPY ["EchoBot.csproj", "./"]
-RUN dotnet restore "EchoBot.csproj"
+RUN dotnet build EchoBot.csproj --arch x64 --self-contained --configuration Release --output C:\app
 
-# Copy the rest of the code
-COPY . .
+FROM mcr.microsoft.com/windows/server:10.0.20348.2655
+SHELL ["powershell", "-Command"]
 
-# Build the application
-RUN dotnet build "EchoBot.csproj" -c Release -o /app/build
+ADD https://aka.ms/vs/17/release/vc_redist.x64.exe /bot/VC_redist.x64.exe
 
-# Publish the application
-FROM build AS publish
-RUN dotnet publish "EchoBot.csproj" -c Release -o /app/publish
+COPY /scripts/entrypoint.cmd /bot
+COPY /scripts/halt_termination.ps1 /bot
+COPY --from=build /app /bot
 
-# Build the runtime image
-FROM mcr.microsoft.com/dotnet/aspnet:6.0 AS runtime
-WORKDIR /app
+WORKDIR /bot
 
-# Install required dependencies for Media Services
-RUN apt-get update && apt-get install -y \
-    libc6 \
-    libgcc1 \
-    libgssapi-krb5-2 \
-    libicu67 \
-    libssl1.1 \
-    libstdc++6 \
-    zlib1g \
-    && rm -rf /var/lib/apt/lists/*
+RUN Set-ExecutionPolicy Bypass -Scope Process -Force; \
+    [System.Net.ServicePointManager]::SecurityProtocol = \
+        [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; \
+        iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
 
-# Copy the published application
-COPY --from=publish /app/publish .
+RUN choco install openssl.light -y
 
-# Create directory for certificates if needed
-RUN mkdir -p /usr/share/dotnet/https/
+EXPOSE $InstanceInternalPort
+EXPOSE $CallSignalingPort
+EXPOSE $CallSignalingPort2
 
-# Set environment variables
-ENV ASPNETCORE_URLS=http://+:8445
-ENV DOTNET_RUNNING_IN_CONTAINER=true
-
-# Expose the necessary ports
-# 8445 for the bot service
-# 17659 for media instance external port
-EXPOSE 8445 17659
-
-# Start the application
-ENTRYPOINT ["dotnet", "EchoBot.dll"]
+ENTRYPOINT [ "entrypoint.cmd" ]
