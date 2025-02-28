@@ -74,25 +74,38 @@ namespace EchoBot.Bot
         private readonly WebSocketClient _webSocketClient;
         private readonly object _fileLock = new object();
 
-        private async Task AppendToAudioTodayFile(string jsonData)
+        // Dictionary to store buffers for each speaker
+        private Dictionary<string, List<byte[]>> _speakerBuffers = new Dictionary<string, List<byte[]>>();
+        private string _currentSpeakerId = null;
+        private DateTime _lastBufferTime = DateTime.MinValue;
+        private const int SILENCE_THRESHOLD_MS = 500; // 500ms silence threshold
+
+        private class ParticipantInfo
         {
-            var filePath = Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
-            lock (_fileLock)
-            {
-                // Ensure each JSON object is on a new line
-                File.AppendAllText(filePath, jsonData + Environment.NewLine);
-            }
+            public string UserId { get; set; }
+            public string DisplayName { get; set; }
+            public string Email { get; set; }
         }
 
-        private async Task AppendToVideoTodayFile(string jsonData)
-        {
-            var filePath = Path.Combine("rawData", $"video_data_{DateTime.Now:yyyy-MM-dd}.txt");
-            lock (_fileLock)
-            {
-                // Ensure each JSON object is on a new line
-                File.AppendAllText(filePath, jsonData + Environment.NewLine);
-            }
-        }
+        private Dictionary<string, ParticipantInfo> _participantInfo = new Dictionary<string, ParticipantInfo>();        // private async Task AppendToAudioTodayFile(string jsonData)
+        // {
+        //     var filePath = Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
+        //     lock (_fileLock)
+        //     {
+        //         // Ensure each JSON object is on a new line
+        //         File.AppendAllText(filePath, jsonData + Environment.NewLine);
+        //     }
+        // }
+
+        // private async Task AppendToVideoTodayFile(string jsonData)
+        // {
+        //     var filePath = Path.Combine("rawData", $"video_data_{DateTime.Now:yyyy-MM-dd}.txt");
+        //     lock (_fileLock)
+        //     {
+        //         // Ensure each JSON object is on a new line
+        //         File.AppendAllText(filePath, jsonData + Environment.NewLine);
+        //     }
+        // }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BotMediaStream" /> class.
@@ -271,9 +284,6 @@ namespace EchoBot.Bot
         /// <param name="e">The audio media received arguments.</param>
         private async void OnAudioMediaReceived(object sender, AudioMediaReceivedEventArgs e)
         {
-            // Console.WriteLine("Received Audio : " + e.Buffer.UnmixedAudioBuffers);
-            // Console.WriteLine("Received Audio : " + e.Buffer.ActiveSpeakers);
-
             if (e.Buffer.UnmixedAudioBuffers != null)
             {
                 foreach (var buffer in e.Buffer.UnmixedAudioBuffers)
@@ -281,49 +291,50 @@ namespace EchoBot.Bot
                     var length = buffer.Length;
                     var data = new byte[length];
                     Marshal.Copy(buffer.Data, data, 0, (int)length);
-                    // Console.WriteLine("buffer.ActiveSpeakerId: " + buffer.ActiveSpeakerId);
                     
-                    // Get participant information using the call instance
-                    var participant = _call.Participants.SingleOrDefault(x => 
-                        x.Resource.IsInLobby == false && 
-                        x.Resource.MediaStreams.Any(y => y.SourceId == buffer.ActiveSpeakerId.ToString()));
+                    var speakerId = buffer.ActiveSpeakerId.ToString();
                     
-                    if (participant != null)
+                    // If speaker changed, process and send the previous speaker's buffered audio
+                    if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
                     {
-                        var identitySet = participant.Resource?.Info?.Identity;
-                        var identity = identitySet?.User;
-                        // Console.WriteLine($"identity: {identity}");
-                        // Console.WriteLine($"Active Speaker Identity: {identity?.Id}, DisplayName: {identity?.DisplayName}");
-                        
-                        // Get stored user details including email
-                        UserDetails userDetails = null;
-                        if (identity?.Id != null && userDetailsMap != null)
-                        {
-                            userDetailsMap.TryGetValue(identity.Id, out userDetails);
-                        }
-                        
-                        try 
-                        {
-                            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-                            var metadata = JsonSerializer.Serialize(new
-                            {
-                                type = "audio",
-                                timestamp = timestamp,
-                                activeSpeakerId = buffer.ActiveSpeakerId,
-                                userId = identity?.Id,
-                                displayName = identity?.DisplayName,
-                                email = userDetails?.Email,
-                                length = length
-                            });
+                        await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                    }
 
-                            // Send to WebSocket server
-                            await _webSocketClient.SendAudioDataAsync(data, userDetails?.Email, identity?.DisplayName);
-                            // Also save to file
-                            await AppendToAudioTodayFile(metadata);
-                        }
-                        catch (Exception ex)
+                    // Initialize buffer list for new speaker if needed
+                    if (!_speakerBuffers.ContainsKey(speakerId))
+                    {
+                        _speakerBuffers[speakerId] = new List<byte[]>();
+                    }
+
+                    // Add current buffer to speaker's buffer list
+                    _speakerBuffers[speakerId].Add(data);
+                    _currentSpeakerId = speakerId;
+                    _lastBufferTime = DateTime.Now;
+
+                    // Store the participant info for when we need to send
+                    if (!_participantInfo.ContainsKey(speakerId))
+                    {
+                        var participant = _call.Participants.SingleOrDefault(x => 
+                            x.Resource.IsInLobby == false && 
+                            x.Resource.MediaStreams.Any(y => y.SourceId == speakerId));
+                        
+                        if (participant != null)
                         {
-                            _logger.LogError(ex, "Error processing audio data");
+                            var identitySet = participant.Resource?.Info?.Identity;
+                            var identity = identitySet?.User;
+                            
+                            UserDetails userDetails = null;
+                            if (identity?.Id != null && userDetailsMap != null)
+                            {
+                                userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                            }
+
+                            _participantInfo[speakerId] = new ParticipantInfo 
+                            {
+                                UserId = identity?.Id,
+                                DisplayName = identity?.DisplayName,
+                                Email = userDetails?.Email
+                            };
                         }
                     }
                 }
@@ -331,20 +342,25 @@ namespace EchoBot.Bot
 
             try
             {
-                // Console.WriteLine($"Received Audio: [AudioMediaReceivedEventArgs(Data=<{e.Buffer.Data.ToString()}>, Length={e.Buffer.Length}, Timestamp={e.Buffer.Timestamp})]");
                 if (!startVideoPlayerCompleted.Task.IsCompleted) { return; }
+
+                // Check for silence timeout and process any pending buffers
+                if (_currentSpeakerId != null)
+                {
+                    var timeSinceLastBuffer = DateTime.Now - _lastBufferTime;
+                    if (timeSinceLastBuffer.TotalMilliseconds > SILENCE_THRESHOLD_MS)
+                    {
+                        await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                        _currentSpeakerId = null;
+                    }
+                }
 
                 if (_languageService != null)
                 {
-                    // send audio buffer to language service for processing
-                    // the particpant talking will hear the bot repeat what they said
                     await _languageService.AppendAudioBuffer(e.Buffer);
-                    e.Buffer.Dispose();
                 }
                 else
                 {
-                    // send audio buffer back on the audio socket
-                    // the particpant talking will hear themselves
                     var length = e.Buffer.Length;
                     if (length > 0)
                     {
@@ -365,6 +381,54 @@ namespace EchoBot.Bot
             finally
             {
                 e.Buffer.Dispose();
+            }
+        }
+
+        private async Task ProcessAndSendBufferedAudio(string speakerId)
+        {
+            if (_speakerBuffers.ContainsKey(speakerId) && _speakerBuffers[speakerId].Count > 0)
+            {
+                try
+                {
+                    // Combine all buffers for this speaker
+                    var totalLength = _speakerBuffers[speakerId].Sum(b => b.Length);
+                    var combinedBuffer = new byte[totalLength];
+                    var offset = 0;
+
+                    foreach (var buffer in _speakerBuffers[speakerId])
+                    {
+                        Buffer.BlockCopy(buffer, 0, combinedBuffer, offset, buffer.Length);
+                        offset += buffer.Length;
+                    }
+
+                    // Get participant info
+                    if (_participantInfo.TryGetValue(speakerId, out var info))
+                    {
+                        var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+                        var metadata = JsonSerializer.Serialize(new
+                        {
+                            type = "audio",
+                            timestamp = timestamp,
+                            activeSpeakerId = speakerId,
+                            userId = info.UserId,
+                            displayName = info.DisplayName,
+                            email = info.Email,
+                            length = totalLength
+                        });
+
+                        // Send combined buffer to WebSocket server
+                        await _webSocketClient.SendAudioDataAsync(combinedBuffer, info.Email, info.DisplayName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing clubbed audio data");
+                }
+                finally
+                {
+                    // Clear the buffers after sending
+                    _speakerBuffers[speakerId].Clear();
+                }
             }
         }
 
@@ -413,7 +477,7 @@ namespace EchoBot.Bot
                     await _webSocketClient.SendVideoDataAsync(data, userDetails?.Email, identity?.DisplayName);
                     
                     // Also save to file
-                    await AppendToVideoTodayFile(metadata);
+                    // await AppendToVideoTodayFile(metadata);
                 }
             }
             catch (Exception ex)
