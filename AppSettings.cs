@@ -59,6 +59,11 @@ namespace EchoBot
         public string WebSocketServerUrl { get; set; }
 
         /// <summary>
+        /// Gets or sets the JWT secret for WebSocket authentication
+        /// </summary>
+        public string WebSocketJwtSecret { get; set; }
+
+        /// <summary>
         /// Gets or sets the call signaling port.
         /// Internal port to listen for new calls load balanced
         /// from 443 => to this local port

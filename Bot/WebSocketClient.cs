@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using System.IO;
+using JWT.Algorithms;
+using JWT.Builder;
 
 namespace EchoBot.Bot
 {
@@ -14,15 +16,41 @@ namespace EchoBot.Bot
         private readonly Uri _serverUri;
         private readonly ILogger _logger;
         private readonly CancellationTokenSource _cancellationTokenSource;
+        private readonly string _jwtSecret;
         private bool _isConnected;
+        
+        public event EventHandler ConnectionClosed;
 
-        public WebSocketClient(string serverUrl, ILogger logger)
+        public WebSocketClient(string serverUrl, string jwtSecret, ILogger logger)
         {
             _webSocket = new ClientWebSocket();
             _serverUri = new Uri(serverUrl);
+            _jwtSecret = jwtSecret;
             _logger = logger;
             _cancellationTokenSource = new CancellationTokenSource();
             _isConnected = false;
+        }
+
+        private string GenerateJwtToken()
+        {
+            try
+            {
+                var token = JwtBuilder.Create()
+                    .WithAlgorithm(new HMACSHA256Algorithm())
+                    .WithSecret(_jwtSecret)
+                    .AddClaim("type", "teams-bot")
+                    .AddClaim("iat", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+                    .AddClaim("exp", DateTimeOffset.UtcNow.AddHours(24).ToUnixTimeSeconds())
+                    .Encode();
+
+                _logger.LogInformation("JWT token generated successfully");
+                return token;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error generating JWT token: {ex.Message}");
+                throw;
+            }
         }
 
         public async Task ConnectAsync()
@@ -31,21 +59,57 @@ namespace EchoBot.Bot
             {
                 if (_webSocket.State != WebSocketState.Open)
                 {
+                    // Generate JWT token
+                    var token = GenerateJwtToken();
+
+                    // Add token to Authorization header
+                    _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+                    
+                    _logger.LogInformation($"Connecting to WebSocket at {_serverUri}");
                     await _webSocket.ConnectAsync(_serverUri, _cancellationTokenSource.Token);
                     _isConnected = true;
-                    _logger.LogInformation($"WebSocket connected to {_serverUri}");
+                    _logger.LogInformation("WebSocket connected successfully");
+
+                    // Start monitoring connection state
+                    _ = MonitorConnectionStateAsync();
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError($"WebSocket connection error: {ex.Message}");
+                _isConnected = false;
+                OnConnectionClosed();
                 throw;
             }
         }
 
+        private async Task MonitorConnectionStateAsync()
+        {
+            while (!_cancellationTokenSource.Token.IsCancellationRequested)
+            {
+                if (_webSocket.State != WebSocketState.Open)
+                {
+                    _isConnected = false;
+                    OnConnectionClosed();
+                    break;
+                }
+                await Task.Delay(1000);
+            }
+        }
+
+        private void OnConnectionClosed()
+        {
+            _logger.LogWarning("WebSocket connection closed");
+            ConnectionClosed?.Invoke(this, EventArgs.Empty);
+        }
+
         public async Task SendAudioDataAsync(byte[] audioData, string email, string displayName)
         {
-            if (!_isConnected) return;
+            if (!_isConnected || _webSocket.State != WebSocketState.Open)
+            {
+                _logger.LogWarning("Cannot send audio data - WebSocket is not connected");
+                return;
+            }
 
             try
             {
@@ -69,13 +133,22 @@ namespace EchoBot.Bot
             catch (Exception ex)
             {
                 _logger.LogError($"Error sending audio data: {ex.Message}");
+                if (_webSocket.State != WebSocketState.Open)
+                {
+                    _isConnected = false;
+                    OnConnectionClosed();
+                }
                 throw;
             }
         }
 
         public async Task SendVideoDataAsync(byte[] videoData, string email, string displayName)
         {
-            if (!_isConnected) return;
+            if (!_isConnected || _webSocket.State != WebSocketState.Open)
+            {
+                _logger.LogWarning("Cannot send video data - WebSocket is not connected");
+                return;
+            }
 
             try
             {
@@ -99,6 +172,11 @@ namespace EchoBot.Bot
             catch (Exception ex)
             {
                 _logger.LogError($"Error sending video data: {ex.Message}");
+                if (_webSocket.State != WebSocketState.Open)
+                {
+                    _isConnected = false;
+                    OnConnectionClosed();
+                }
                 throw;
             }
         }
@@ -120,6 +198,8 @@ namespace EchoBot.Bot
                             WebSocketCloseStatus.NormalClosure,
                             string.Empty,
                             _cancellationTokenSource.Token);
+                        _isConnected = false;
+                        OnConnectionClosed();
                     }
                     else
                     {
@@ -133,6 +213,8 @@ namespace EchoBot.Bot
             catch (Exception ex)
             {
                 _logger.LogError($"Error receiving data: {ex.Message}");
+                _isConnected = false;
+                OnConnectionClosed();
                 throw;
             }
         }

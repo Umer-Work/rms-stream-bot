@@ -83,6 +83,7 @@ namespace EchoBot.Bot
         private readonly SpeechService _languageService;
         private readonly WebSocketClient _webSocketClient;
         private readonly object _fileLock = new object();
+        private bool _isWebSocketConnected = false;
 
         // Dictionary to store buffers for each speaker
         private Dictionary<string, List<byte[]>> _speakerBuffers = new Dictionary<string, List<byte[]>>();
@@ -147,15 +148,33 @@ namespace EchoBot.Bot
             _call = call;
 
             // Initialize WebSocket client
-            string wsUrl = settings.WebSocketServerUrl;
-            // Try to get from environment variable if not in settings
-            if (string.IsNullOrEmpty(wsUrl))
+            if (string.IsNullOrEmpty(_settings.WebSocketServerUrl))
             {
-                wsUrl = Environment.GetEnvironmentVariable("WEBSOCKET_SERVER_URL") ?? "ws://localhost:3000";
+                _logger.LogError("WebSocket server URL is not configured");
+                return;
             }
-            _webSocketClient = new WebSocketClient(wsUrl, logger);
+
+            if (string.IsNullOrEmpty(_settings.WebSocketJwtSecret))
+            {
+                _logger.LogError("WebSocket JWT secret is not configured");
+                return;
+            }
+
+            _webSocketClient = new WebSocketClient(_settings.WebSocketServerUrl, _settings.WebSocketJwtSecret, logger);
+            _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
+            
             // Connect to WebSocket server
-            _webSocketClient.ConnectAsync().Wait();
+            try 
+            {
+                _webSocketClient.ConnectAsync().Wait();
+                _isWebSocketConnected = true;
+                _logger.LogInformation("Successfully connected to WebSocket server");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to connect to WebSocket server: {ex.Message}");
+                _isWebSocketConnected = false;
+            }
 
             // Initialize participants list
             this.participants = new List<IParticipant>();
@@ -294,6 +313,8 @@ namespace EchoBot.Bot
         /// <param name="e">The audio media received arguments.</param>
         private async void OnAudioMediaReceived(object sender, AudioMediaReceivedEventArgs e)
         {
+            if (!_isWebSocketConnected) return;
+
             if (e.Buffer.UnmixedAudioBuffers != null)
             {
                 foreach (var buffer in e.Buffer.UnmixedAudioBuffers)
@@ -442,13 +463,10 @@ namespace EchoBot.Bot
             }
         }
 
-        /// <summary>
-        /// Receive video from subscribed participant.
-        /// </summary>
-        /// <param name="sender">The sender.</param>
-        /// <param name="e">The video media received arguments.</param>
         private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
         {
+            if (!_isWebSocketConnected) return;
+
             try 
             {
                 var participant = _call.Participants.SingleOrDefault(x => 
@@ -532,6 +550,12 @@ namespace EchoBot.Bot
         {
             this.audioMediaBuffers = e.AudioMediaBuffers;
             var result = Task.Run(async () => await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>())).GetAwaiter();
+        }
+
+        private void WebSocketClient_ConnectionClosed(object sender, EventArgs e)
+        {
+            _isWebSocketConnected = false;
+            _logger.LogWarning("WebSocket connection closed - audio/video streaming will be paused");
         }
 
         /// <summary>
