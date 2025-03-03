@@ -181,6 +181,45 @@ namespace EchoBot.Bot
             }
         }
 
+        public async Task SendMeetingEventAsync(string eventType, long startTime, long? endTime = null)
+        {
+            if (!_isConnected || _webSocket.State != WebSocketState.Open)
+            {
+                _logger.LogWarning("Cannot send meeting event - WebSocket is not connected");
+                return;
+            }
+
+            try
+            {
+                var payload = new
+                {
+                    type = "meeting_event",
+                    eventType = eventType,
+                    startTime = startTime,
+                    endTime = endTime
+                };
+
+                var jsonString = System.Text.Json.JsonSerializer.Serialize(payload);
+                var messageBytes = Encoding.UTF8.GetBytes(jsonString);
+
+                await _webSocket.SendAsync(
+                    new ArraySegment<byte>(messageBytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    _cancellationTokenSource.Token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error sending meeting event: {ex.Message}");
+                if (_webSocket.State != WebSocketState.Open)
+                {
+                    _isConnected = false;
+                    OnConnectionClosed();
+                }
+                throw;
+            }
+        }
+
         public async Task StartReceivingAsync()
         {
             var buffer = new byte[4096];

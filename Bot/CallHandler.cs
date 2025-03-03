@@ -44,6 +44,8 @@ namespace EchoBot.Bot
         private readonly IVideoSocket _videoSocket;
         private readonly AppSettings _settings;
 
+        private long? _meetingStartTime;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
         /// </summary>
@@ -108,64 +110,36 @@ namespace EchoBot.Bot
         /// <param name="e">The event args containing call changes.</param>
         private async void CallOnUpdated(ICall sender, ResourceEventArgs<Call> e)
         {
-            // Console.WriteLine($"[CallHandler] Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
+            Console.WriteLine($"[CallHandler] Call state changed from {e.NewResource.State} to {CallState.Terminated}");
             GraphLogger.Info($"Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
 
-            // if (e.OldResource.State != e.NewResource.State && e.NewResource.State == CallState.Established)
-            // {
-            //     // Console.WriteLine($"[CallHandler] Call established, getting updated roster");
+            // Handle call establishment
+            if (e.OldResource.State != CallState.Established && e.NewResource.State == CallState.Established)
+            {
+                _meetingStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_started", _meetingStartTime.Value);
+                Console.WriteLine($"[CallHandler] Meeting started at timestamp: {_meetingStartTime.Value}");
+            }
+
+            // Handle call termination
+            if (e.NewResource.State == CallState.Terminated)
+            {
+                Console.WriteLine($"[CallHandler] Call terminated. Reason: {e.NewResource.ResultInfo?.Message}");
                 
-            //     try
-            //     {
-            //         // Wait briefly to ensure participants are fully loaded
-            //         await Task.Delay(1000);
+                // Send meeting ended event with start and end times
+                if (_meetingStartTime.HasValue)
+                {
+                    var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_ended", _meetingStartTime.Value, endTime);
+                    Console.WriteLine($"[CallHandler] Meeting ended at timestamp: {endTime}");
+                }
 
-            //         // Get participants from the call resource
-            //         var resourceParticipants = e.NewResource.Participants;
-            //         // Console.WriteLine($"[CallHandler] Resource participants count: {resourceParticipants?.Count ?? 0}");
-                    
-            //         if (resourceParticipants != null)
-            //         {
-            //             foreach (var participant in resourceParticipants)
-            //             {
-            //                 try 
-            //                 {
-            //                     // Get detailed participant info
-            //                     var participantInfo = await this.Call.Participants.GetAsync(participant.Id);
-            //                     if (participantInfo != null && CheckParticipantIsUsable(participantInfo))
-            //                     {
-            //                         Console.WriteLine($"[CallHandler] Adding resource participant: {participantInfo.Resource?.Info?.Identity?.User?.DisplayName ?? participantInfo.Id}");
-            //                         this.updateParticipants(new List<IParticipant> { participantInfo });
-            //                     }
-            //                 }
-            //                 catch (Exception participantEx)
-            //                 {
-            //                     Console.WriteLine($"[CallHandler] Error getting participant details for {participant.Id}: {participantEx.Message}");
-            //                 }
-            //             }
-            //         }
-
-            //         // Also check direct participants
-            //         var directParticipants = this.Call.Participants;
-            //         Console.WriteLine($"[CallHandler] Direct participants count: {directParticipants?.Count ?? 0}");
-            //         if (directParticipants != null)
-            //         {
-            //             foreach (var participant in directParticipants)
-            //             {
-            //                 if (CheckParticipantIsUsable(participant))
-            //                 {
-            //                     Console.WriteLine($"[CallHandler] Adding direct participant: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
-            //                     this.updateParticipants(new List<IParticipant> { participant });
-            //                 }
-            //             }
-            //         }
-            //     }
-            //     catch (Exception ex)
-            //     {
-            //         Console.WriteLine($"[CallHandler] Error getting participants after establish: {ex.Message}");
-            //         GraphLogger.Error(ex, "Error getting participants after establish");
-            //     }
-            // }
+                if (BotMediaStream != null)
+                {
+                    Console.WriteLine($"[CallHandler] Shutting down media stream");
+                    await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
+                }
+            }
 
             if ((e.OldResource.State == CallState.Established) && (e.NewResource.State == CallState.Terminated))
             {

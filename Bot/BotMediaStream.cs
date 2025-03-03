@@ -62,6 +62,11 @@ namespace EchoBot.Bot
         internal Dictionary<string, UserDetails> userDetailsMap;
 
         /// <summary>
+        /// Gets the WebSocket client instance
+        /// </summary>
+        public WebSocketClient WebSocketClient => _webSocketClient;
+
+        /// <summary>
         /// The audio socket
         /// </summary>
         private readonly IAudioSocket _audioSocket;
