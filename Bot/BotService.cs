@@ -269,17 +269,17 @@ namespace EchoBot.Bot
         {
             try
             {
-                var videoSocketSettings = new List<VideoSocketSettings>();
+                // var videoSocketSettings = new List<VideoSocketSettings>();
 
-                // create the receive only sockets settings for the multiview support
-                for (int i = 0; i < 3; i++)
-                {
-                    videoSocketSettings.Add(new VideoSocketSettings
-                    {
-                        StreamDirections = StreamDirection.Recvonly,
-                        ReceiveColorFormat = VideoColorFormat.NV12,
-                    });
-                }
+                // // create the receive only sockets settings for the multiview support
+                // for (int i = 0; i < 3; i++)
+                // {
+                //     videoSocketSettings.Add(new VideoSocketSettings
+                //     {
+                //         StreamDirections = StreamDirection.Recvonly,
+                //         ReceiveColorFormat = VideoColorFormat.NV12,
+                //     });
+                // }
 
                 // create media session object, this is needed to establish call connections
                 return this.Client.CreateMediaSession(
@@ -290,7 +290,17 @@ namespace EchoBot.Bot
                         SupportedAudioFormat = AudioFormat.Pcm16K,
                         ReceiveUnmixedMeetingAudio = true //get the extra buffers for the speakers
                     },
-                    videoSocketSettings,    
+                    new VideoSocketSettings
+                    {
+                        StreamDirections = StreamDirection.Recvonly,
+                        ReceiveColorFormat = VideoColorFormat.NV12,
+                        SupportedSendVideoFormats = new List<VideoFormat>
+                        {
+                            VideoFormat.H264_320x180_15Fps, // Required minimum resolution
+                            VideoFormat.H264_1280x720_30Fps // Your desired resolution
+                        },
+                        MaxConcurrentSendStreams = 1
+                    },
                     mediaSessionId: mediaSessionId);
             }
             catch (Exception e)

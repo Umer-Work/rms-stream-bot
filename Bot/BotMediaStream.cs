@@ -42,6 +42,16 @@ namespace EchoBot.Bot
         private AppSettings _settings;
 
         /// <summary>
+        /// The video stream interval in seconds
+        /// </summary>
+        private const int VIDEO_STREAM_INTERVAL = 5;
+
+        /// <summary>
+        /// Dictionary to track last video send time for each participant
+        /// </summary>
+        private readonly Dictionary<string, DateTime> _lastVideoSendTime = new Dictionary<string, DateTime>();
+
+        /// <summary>
         /// The participants
         /// </summary>
         internal List<IParticipant> participants;
@@ -448,9 +458,34 @@ namespace EchoBot.Bot
                 if (participant != null)
                 {
                     var identity = participant.Resource?.Info?.Identity?.User;
+                    if (identity?.Id == null)
+                    {
+                        return;
+                    }
+
+                    // Check if enough time has passed since last send for this participant
+                    var now = DateTime.Now;
+                    var shouldSend = false;
+
+                    if (_lastVideoSendTime.TryGetValue(identity.Id, out DateTime lastSendTime))
+                    {
+                        var timeSinceLastSend = now - lastSendTime;
+                        shouldSend = timeSinceLastSend.TotalSeconds >= VIDEO_STREAM_INTERVAL;
+                    }
+                    else
+                    {
+                        // For first time, set the initial time and don't send immediately
+                        _lastVideoSendTime[identity.Id] = now;
+                        return;
+                    }
+
+                    if (!shouldSend)
+                    {
+                        return;
+                    }
                     
                     UserDetails userDetails = null;
-                    if (identity?.Id != null && userDetailsMap != null)
+                    if (userDetailsMap != null)
                     {
                         userDetailsMap.TryGetValue(identity.Id, out userDetails);
                     }
@@ -462,9 +497,9 @@ namespace EchoBot.Bot
                     var metadata = JsonSerializer.Serialize(new
                     {
                         type = "video",
-                        timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
+                        timestamp = now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
                         mediaSourceId = e.Buffer.MediaSourceId,
-                        userId = identity?.Id,
+                        userId = identity.Id,
                         displayName = identity?.DisplayName,
                         email = userDetails?.Email,
                         length = length,
@@ -476,6 +511,9 @@ namespace EchoBot.Bot
                     // Send to WebSocket server
                     await _webSocketClient.SendVideoDataAsync(data, userDetails?.Email, identity?.DisplayName);
                     
+                    // Update last send time for this participant
+                    _lastVideoSendTime[identity.Id] = now;
+
                     // Also save to file
                     // await AppendToVideoTodayFile(metadata);
                 }
