@@ -101,6 +101,9 @@ namespace EchoBot.Bot
         private DateTime _lastBufferTime = DateTime.MinValue;
         private const int SILENCE_THRESHOLD_MS = 500; // 500ms silence threshold
 
+        // Track when each speaker started speaking
+        private Dictionary<string, long> _speakerStartTimes = new Dictionary<string, long>();
+
         private class ParticipantInfo
         {
             public string UserId { get; set; }
@@ -347,12 +350,16 @@ namespace EchoBot.Bot
                     if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
                     {
                         await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                        // Clear the start time for the previous speaker
+                        _speakerStartTimes.Remove(_currentSpeakerId);
                     }
 
                     // Initialize buffer list for new speaker if needed
                     if (!_speakerBuffers.ContainsKey(speakerId))
                     {
                         _speakerBuffers[speakerId] = new List<byte[]>();
+                        // Record the start time when we first get audio from this speaker
+                        _speakerStartTimes[speakerId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     }
 
                     // Add current buffer to speaker's buffer list
@@ -451,31 +458,49 @@ namespace EchoBot.Bot
                     }
 
                     UserDetails userDetails = null;
-  
 
                     // Get participant info
                     if (_participantInfo.TryGetValue(speakerId, out var info))
                     {
-
                         if (userDetailsMap != null)
                         {
                             userDetailsMap.TryGetValue(info.UserId, out userDetails);
                         }
 
-                        var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+                        var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        // Get the time when this speaker started speaking
+                        var speakStartTime = System.Collections.Generic.CollectionExtensions.GetValueOrDefault(_speakerStartTimes, speakerId, currentTimestamp);
+
+                        // Calculate time since meeting start (in seconds)
+                        long? timeSinceMeetingStart = null;
+                        if (_meetingStartTime.HasValue)
+                        {
+                            timeSinceMeetingStart = (speakStartTime * 1000) - _meetingStartTime.Value;
+                        }
+
                         var metadata = JsonSerializer.Serialize(new
                         {
-                            type = "audio",
-                            timestamp = timestamp,
+                            timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
                             activeSpeakerId = speakerId,
                             userId = info.UserId,
                             displayName = info.DisplayName,
-                            email = userDetails.Email,
-                            length = totalLength
+                            email = userDetails?.Email,
+                            length = totalLength,
+                            meetingStartTime = _meetingStartTime,
+                            speakStartTime = speakStartTime, 
+                            speakEndTime = currentTimestamp,
+                            timeSinceMeetingStart = timeSinceMeetingStart / 1000  // Adding time since meeting start
                         });
 
-                        // Send combined buffer to WebSocket server
-                        await _webSocketClient.SendAudioDataAsync(combinedBuffer, userDetails.Email, info.DisplayName);
+                        // Send both the audio data and timing information
+                        await _webSocketClient.SendAudioDataAsync(
+                            combinedBuffer, 
+                            userDetails?.Email, 
+                            info.DisplayName,
+                            speakStartTime,
+                            currentTimestamp,
+                            timeSinceMeetingStart
+                        );
                     }
                 }
                 catch (Exception ex)
@@ -528,7 +553,7 @@ namespace EchoBot.Bot
                     {
                         return;
                     }
-                    
+
                     UserDetails userDetails = null;
                     if (userDetailsMap != null)
                     {
