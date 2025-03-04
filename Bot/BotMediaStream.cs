@@ -478,22 +478,21 @@ namespace EchoBot.Bot
                             timeSinceMeetingStart = (speakStartTime * 1000) - _meetingStartTime.Value;
                         }
 
-                        Console.WriteLine($"[BotMediaStream] timeSinceMeetingStart/1000: {timeSinceMeetingStart / 1000}, timeSinceMeetingStart: {timeSinceMeetingStart}");
 
-
-                        var metadata = JsonSerializer.Serialize(new
-                        {
-                            timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
-                            activeSpeakerId = speakerId,
-                            userId = info.UserId,
-                            displayName = info.DisplayName,
-                            email = userDetails?.Email,
-                            length = totalLength,
-                            meetingStartTime = _meetingStartTime,
-                            speakStartTime = speakStartTime, 
-                            speakEndTime = currentTimestamp,
-                            timeSinceMeetingStart = timeSinceMeetingStart / 1000  // Adding time since meeting start
-                        });
+                        // var metadata = JsonSerializer.Serialize(new
+                        // {
+                        //     timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
+                        //     activeSpeakerId = speakerId,
+                        //     userId = info.UserId,
+                        //     displayName = info.DisplayName,
+                        //     email = userDetails?.Email,
+                        //     length = totalLength,
+                        //     meetingStartTime = _meetingStartTime,
+                        //     speakStartTime = speakStartTime, 
+                        //     speakEndTime = currentTimestamp,
+                        //     timeSinceMeetingStart = timeSinceMeetingStart / 1000,  // Adding time since meeting start
+                        //     role = userDetails?.Email == _candidateEmail ? "Candidate" : "Panelist"
+                        // });
 
                         // Send both the audio data and timing information
                         await _webSocketClient.SendAudioDataAsync(
@@ -502,7 +501,8 @@ namespace EchoBot.Bot
                             info.DisplayName,
                             speakStartTime,
                             currentTimestamp,
-                            timeSinceMeetingStart / 1000
+                            timeSinceMeetingStart / 1000,
+                            userDetails?.Email == _candidateEmail ? "Candidate" : "Panelist"
                         );
                     }
                 }
@@ -567,19 +567,19 @@ namespace EchoBot.Bot
                     var data = new byte[length];
                     Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
 
-                    var metadata = JsonSerializer.Serialize(new
-                    {
-                        type = "video",
-                        timestamp = now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
-                        mediaSourceId = e.Buffer.MediaSourceId,
-                        userId = identity.Id,
-                        displayName = identity?.DisplayName,
-                        email = userDetails?.Email,
-                        length = length,
-                        width = e.Buffer.VideoFormat.Width,
-                        height = e.Buffer.VideoFormat.Height,
-                        frameRate = e.Buffer.VideoFormat.FrameRate
-                    });
+                    // var metadata = JsonSerializer.Serialize(new
+                    // {
+                    //     type = "video",
+                    //     timestamp = now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
+                    //     mediaSourceId = e.Buffer.MediaSourceId,
+                    //     userId = identity.Id,
+                    //     displayName = identity?.DisplayName,
+                    //     email = userDetails?.Email,
+                    //     length = length,
+                    //     width = e.Buffer.VideoFormat.Width,
+                    //     height = e.Buffer.VideoFormat.Height,
+                    //     frameRate = e.Buffer.VideoFormat.FrameRate
+                    // });
 
                     // Send to WebSocket server
                     await _webSocketClient.SendVideoDataAsync(data, userDetails?.Email, identity?.DisplayName);
