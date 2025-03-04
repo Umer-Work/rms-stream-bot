@@ -536,6 +536,18 @@ namespace EchoBot.Bot
                         return;
                     }
 
+                    UserDetails userDetails = null;
+                    if (userDetailsMap != null)
+                    {
+                        userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                    }
+
+                    // Only proceed if this is the candidate's video stream
+                    if (userDetails?.Email != _candidateEmail)
+                    {
+                        return;
+                    }
+
                     // Check if enough time has passed since last send for this participant
                     var now = DateTime.Now;
                     var shouldSend = false;
@@ -557,38 +569,15 @@ namespace EchoBot.Bot
                         return;
                     }
 
-                    UserDetails userDetails = null;
-                    if (userDetailsMap != null)
-                    {
-                        userDetailsMap.TryGetValue(identity.Id, out userDetails);
-                    }
-
                     var length = e.Buffer.Length;
                     var data = new byte[length];
                     Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
-
-                    // var metadata = JsonSerializer.Serialize(new
-                    // {
-                    //     type = "video",
-                    //     timestamp = now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
-                    //     mediaSourceId = e.Buffer.MediaSourceId,
-                    //     userId = identity.Id,
-                    //     displayName = identity?.DisplayName,
-                    //     email = userDetails?.Email,
-                    //     length = length,
-                    //     width = e.Buffer.VideoFormat.Width,
-                    //     height = e.Buffer.VideoFormat.Height,
-                    //     frameRate = e.Buffer.VideoFormat.FrameRate
-                    // });
 
                     // Send to WebSocket server
                     await _webSocketClient.SendVideoDataAsync(data, userDetails?.Email, identity?.DisplayName);
                     
                     // Update last send time for this participant
                     _lastVideoSendTime[identity.Id] = now;
-
-                    // Also save to file
-                    // await AppendToVideoTodayFile(metadata);
                 }
             }
             catch (Exception ex)
