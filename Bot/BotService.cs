@@ -24,6 +24,7 @@ using Microsoft.Graph.Communications.Common.Telemetry;
 using Microsoft.Graph.Communications.Resources;
 using Microsoft.Skype.Bots.Media;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net;
 using EchoBot.Util;
 using Microsoft.Graph.Models;
@@ -72,6 +73,10 @@ namespace EchoBot.Bot
         /// <value>The client.</value>
         public ICommunicationsClient Client { get; private set; }
 
+        /// <summary>
+        /// Store meeting details for each call by thread ID
+        /// </summary>
+        private readonly Dictionary<string, (long? StartTime, long? EndTime, string? CandidateEmail)> _pendingCallDetails = new Dictionary<string, (long? StartTime, long? EndTime, string? CandidateEmail)>();
 
         /// <summary>
         /// Dispose of the call client
@@ -220,39 +225,14 @@ namespace EchoBot.Bot
             // Console.WriteLine($"[BotService] Attempting to join call...");
             if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId, out CallHandler? call))
             {
+                // Store the call details before creating the call
+                _pendingCallDetails[joinParams.ChatInfo.ThreadId] = (
+                    joinCallBody.MeetingStartTime,
+                    joinCallBody.MeetingEndTime,
+                    joinCallBody.CandidateEmail
+                );
+
                 var statefulCall = await this.Client.Calls().AddAsync(joinParams, scenarioId).ConfigureAwait(false);
-                // Console.WriteLine($"[BotService] Call creation complete: {statefulCall.Id}");
-
-                // Wait for call to be established
-                var timeout = TimeSpan.FromSeconds(30);
-                var startTime = DateTime.UtcNow;
-                // while (statefulCall.Resource.State != CallState.Established && DateTime.UtcNow - startTime < timeout)
-                // {
-                //     Console.WriteLine($"[BotService] Waiting for call to be established. Current state: {statefulCall.Resource.State}");
-                //     await Task.Delay(1000);
-                // }
-
-                // if (statefulCall.Resource.State == CallState.Established)
-                // {
-                //     // Console.WriteLine($"[BotService] Call established successfully");
-                    
-                //     // Try to get participants after call is established
-                //     var participants = statefulCall.Participants;
-                //     // Console.WriteLine($"[BotService] Participant count: {participants?.Count ?? 0}");
-                //     if (participants != null)
-                //     {
-                //         foreach (var participant in participants)
-                //         {
-                //             var displayName = participant.Resource?.Info?.Identity?.User?.DisplayName ?? "Unknown";
-                //             // Console.WriteLine($"[BotService] Found participant in roster: {displayName}");
-                //         }
-                //     }
-                // }
-                // else
-                // {
-                //     Console.WriteLine($"[BotService] Call did not establish within timeout. Current state: {statefulCall.Resource.State}");
-                // }
-
                 return statefulCall;
             }
 
@@ -370,12 +350,18 @@ namespace EchoBot.Bot
         {
             foreach (var call in args.AddedResources)
             {
-                // Console.WriteLine($"[BotService] Creating CallHandler for call {call.Id}");
-                // Console.WriteLine($"[BotService] Initial participant count: {call.Participants.Count}");
-                
-                var callHandler = new CallHandler(call, _settings, _logger);
                 var threadId = call.Resource.ChatInfo.ThreadId;
+                
+                // Get the stored call details if they exist
+                var (startTime, endTime, candidateEmail) = _pendingCallDetails.TryGetValue(threadId, out var details) 
+                    ? details 
+                    : (null, null, null);
+
+                var callHandler = new CallHandler(call, _settings, _logger, startTime, endTime, candidateEmail);
                 this.CallHandlers[threadId] = callHandler;
+
+                // Clean up stored details
+                _pendingCallDetails.Remove(threadId);
             }
 
             foreach (var call in args.RemovedResources)
@@ -383,7 +369,7 @@ namespace EchoBot.Bot
                 var threadId = call.Resource.ChatInfo.ThreadId;
                 if (this.CallHandlers.TryRemove(threadId, out CallHandler? handler))
                 {
-                    Console.WriteLine($"[BotService] Removing CallHandler for call {call.Id}");
+                    _pendingCallDetails.Remove(threadId); // Clean up any remaining details
                     Task.Run(async () => {
                         await handler.BotMediaStream.ShutdownAsync();
                         handler.Dispose();

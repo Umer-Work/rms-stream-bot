@@ -1,4 +1,4 @@
-﻿// ***********************************************************************
+// ***********************************************************************
 // Assembly         : EchoBot.Models
 // Author           : JasonTheDeveloper
 // Created          : 09-07-2020
@@ -7,7 +7,7 @@
 // Last Modified On : 10-27-2023
 // ***********************************************************************
 // <copyright file="JoinCallBody.cs" company="Microsoft">
-//     Copyright ©  2023
+//     Copyright  2023
 // </copyright>
 // <summary></summary>
 // ***********************************************************************
@@ -35,6 +35,20 @@ namespace EchoBot.Models
         /// </summary>
         /// <value>The display name.</value>
         public string? DisplayName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the candidate's email address (optional)
+        /// </summary>
+        public string? CandidateEmail { get; set; }
+
+        /// <summary>
+        /// Gets or sets the meeting start time in Unix timestamp format (optional)
+        /// </summary>
+        public long? MeetingStartTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the meeting end time in Unix timestamp format (optional)
+        /// </summary>
+        public long? MeetingEndTime { get; set; }
     }
 }
-

@@ -74,6 +74,11 @@ namespace EchoBot.Bot
         /// The call instance
         /// </summary>
         private readonly ICall _call;
+
+        private long? _meetingStartTime;
+        private long? _meetingEndTime;
+        private string? _candidateEmail;
+
         /// <summary>
         /// The media stream
         /// </summary>
@@ -139,7 +144,10 @@ namespace EchoBot.Bot
             IGraphLogger graphLogger,
             ILogger logger,
             AppSettings settings,
-            ICall call
+            ICall call,
+            long? meetingStartTime = null,
+            long? meetingEndTime = null,
+            string? candidateEmail = null
         )
             : base(graphLogger)
         {
@@ -151,6 +159,11 @@ namespace EchoBot.Bot
             _settings = settings;
             _logger = logger;
             _call = call;
+            _meetingStartTime = meetingStartTime;
+            _meetingEndTime = meetingEndTime;
+            _candidateEmail = candidateEmail;
+
+            Console.WriteLine($"[BotMediaStream] Meeting Start Time: {meetingStartTime}, Meeting End Time: {meetingEndTime}, Candidate Email: {candidateEmail}");
 
             // Initialize WebSocket client
             if (string.IsNullOrEmpty(_settings.WebSocketServerUrl))
@@ -437,9 +450,18 @@ namespace EchoBot.Bot
                         offset += buffer.Length;
                     }
 
+                    UserDetails userDetails = null;
+  
+
                     // Get participant info
                     if (_participantInfo.TryGetValue(speakerId, out var info))
                     {
+
+                        if (userDetailsMap != null)
+                        {
+                            userDetailsMap.TryGetValue(info.UserId, out userDetails);
+                        }
+
                         var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
                         var metadata = JsonSerializer.Serialize(new
                         {
@@ -448,12 +470,12 @@ namespace EchoBot.Bot
                             activeSpeakerId = speakerId,
                             userId = info.UserId,
                             displayName = info.DisplayName,
-                            email = info.Email,
+                            email = userDetails.Email,
                             length = totalLength
                         });
 
                         // Send combined buffer to WebSocket server
-                        await _webSocketClient.SendAudioDataAsync(combinedBuffer, info.Email, info.DisplayName);
+                        await _webSocketClient.SendAudioDataAsync(combinedBuffer, userDetails.Email, info.DisplayName);
                     }
                 }
                 catch (Exception ex)

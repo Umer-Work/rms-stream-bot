@@ -39,12 +39,14 @@ namespace EchoBot.Bot
 
         private readonly object subscriptionLock = new object();
 
-        private readonly IGraphLogger _logger;
+        private readonly ILogger _logger;
         private readonly IAudioSocket _audioSocket;
         private readonly IVideoSocket _videoSocket;
         private readonly AppSettings _settings;
 
         private long? _meetingStartTime;
+        private long? _meetingEndTime;
+        private string? _candidateEmail;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
@@ -52,16 +54,25 @@ namespace EchoBot.Bot
         /// <param name="statefulCall">The stateful call.</param>
         /// <param name="settings">The settings.</param>
         /// <param name="logger"></param>
+        /// <param name="meetingStartTime">Optional meeting start time</param>
+        /// <param name="meetingEndTime">Optional meeting end time</param>
+        /// <param name="candidateEmail">Optional candidate email</param>
         public CallHandler(
             ICall statefulCall,
             AppSettings settings,
-            ILogger logger
+            ILogger logger,
+            long? meetingStartTime = null,
+            long? meetingEndTime = null,
+            string? candidateEmail = null
         )
             : base(TimeSpan.FromMinutes(10), statefulCall?.GraphLogger)
         {
             // Console.WriteLine($"[CallHandler] Initializing for call {statefulCall.Id}");
             this.Call = statefulCall;
             this._settings = settings;
+            this._meetingStartTime = meetingStartTime;
+            this._meetingEndTime = meetingEndTime;
+            this._candidateEmail = candidateEmail;
             
             // Subscribe to call updates first
             this.Call.OnUpdated += this.CallOnUpdated;
@@ -83,8 +94,7 @@ namespace EchoBot.Bot
             }
 
             // Create BotMediaStream before subscribing to participants
-            this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings, this.Call);
- 
+            this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings, this.Call, this._meetingStartTime, this._meetingEndTime, this._candidateEmail); 
         }
 
         /// <inheritdoc/>
@@ -110,7 +120,6 @@ namespace EchoBot.Bot
         /// <param name="e">The event args containing call changes.</param>
         private async void CallOnUpdated(ICall sender, ResourceEventArgs<Call> e)
         {
-            Console.WriteLine($"[CallHandler] Call state changed from {e.NewResource.State} to {CallState.Terminated}");
             GraphLogger.Info($"Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
 
             // Handle call establishment
@@ -118,7 +127,6 @@ namespace EchoBot.Bot
             {
                 _meetingStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_started", _meetingStartTime.Value);
-                Console.WriteLine($"[CallHandler] Meeting started at timestamp: {_meetingStartTime.Value}");
             }
 
             // Handle call termination
@@ -131,7 +139,6 @@ namespace EchoBot.Bot
                 {
                     var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_ended", _meetingStartTime.Value, endTime);
-                    Console.WriteLine($"[CallHandler] Meeting ended at timestamp: {endTime}");
                 }
 
                 if (BotMediaStream != null)
