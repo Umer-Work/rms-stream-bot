@@ -478,6 +478,9 @@ namespace EchoBot.Bot
                             timeSinceMeetingStart = (speakStartTime * 1000) - _meetingStartTime.Value;
                         }
 
+                        Console.WriteLine($"[BotMediaStream] timeSinceMeetingStart/1000: {timeSinceMeetingStart / 1000}, timeSinceMeetingStart: {timeSinceMeetingStart}");
+
+
                         var metadata = JsonSerializer.Serialize(new
                         {
                             timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
@@ -499,7 +502,7 @@ namespace EchoBot.Bot
                             info.DisplayName,
                             speakStartTime,
                             currentTimestamp,
-                            timeSinceMeetingStart
+                            timeSinceMeetingStart / 1000
                         );
                     }
                 }
