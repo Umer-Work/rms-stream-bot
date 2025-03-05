@@ -11,6 +11,7 @@ using System.Timers;
 using System.Collections.Generic;
 using Microsoft.Skype.Bots.Media;
 using System.Net.Http.Headers;
+using Newtonsoft.Json;
 
 namespace EchoBot.Bot
 {
@@ -203,11 +204,13 @@ namespace EchoBot.Bot
                 {
                     var json = string.Empty;
 
-                    // todo remove the cast with the new graph implementation,
+                    // todo remove the cast with the new ` implementation,
                     // for now we want the bot to only subscribe to "real" participants
                     var participantDetails = participant?.Resource?.Info?.Identity?.User;
                     var participantId = participant?.Id;
-                    
+
+                    // Console.WriteLine("llllll " + JsonConvert.SerializeObject(participant?.Resource?.Info?.Identity, Formatting.Indented));
+
                     if (participantDetails != null)
                     {
                         // Get user details from Graph API

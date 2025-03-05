@@ -24,6 +24,7 @@ using System.Runtime.InteropServices;
 using System.IO;
 using System.Text.Json;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace EchoBot.Bot
 {
@@ -306,6 +307,9 @@ namespace EchoBot.Bot
         /// <param name="e">The audio media received arguments.</param>
         private async void OnAudioMediaReceived(object sender, AudioMediaReceivedEventArgs e)
         {
+
+            // Console.WriteLine("Audio Media Received: " + JsonConvert.SerializeObject(e, Formatting.Indented));
+
             if (!_isWebSocketConnected) return;
 
             if (e.Buffer.UnmixedAudioBuffers != null)
@@ -461,12 +465,12 @@ namespace EchoBot.Bot
                         // Send both the audio data and timing information
                         await _webSocketClient.SendAudioDataAsync(
                             combinedBuffer, 
-                            userDetails?.Email, 
+                            userDetails?.Email ?? _candidateEmail, 
                             info.DisplayName,
                             speakStartTimeSec * 1000,
                             speakEndTimeSec * 1000,
                             timeSinceMeetingStart,
-                            userDetails?.Email == _candidateEmail ? "Candidate" : "Panelist"
+                            string.IsNullOrEmpty(userDetails?.Email) ? "Candidate" : "Panelist"
                         );
                     }
                 }
@@ -538,7 +542,7 @@ namespace EchoBot.Bot
                     Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
 
                     // Send to WebSocket server
-                    await _webSocketClient.SendVideoDataAsync(data, userDetails?.Email, identity?.DisplayName);
+                    await _webSocketClient.SendVideoDataAsync(data, _candidateEmail, identity?.DisplayName);
                     
                     // Update last send time for this participant
                     _lastVideoSendTime[identity.Id] = now;
