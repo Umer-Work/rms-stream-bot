@@ -105,7 +105,7 @@ namespace EchoBot.Bot
             ConnectionClosed?.Invoke(this, EventArgs.Empty);
         }
 
-        public async Task SendAudioDataAsync(byte[] audioData, string email, string displayName, long? speakStartTime = null, long? speakEndTime = null, long? timeSinceMeetingStart = null, string role = null)
+        public async Task SendAudioDataAsync(byte[] audioData, string email, string displayName, long speakStartTime, long speakEndTime, long? timeSinceMeetingStart = null, string role = null)
         {
             if (!_isConnected || _webSocket.State != WebSocketState.Open)
             {
@@ -118,13 +118,13 @@ namespace EchoBot.Bot
                 var payload = new
                 {
                     type = "audio",
-                    email = email,
-                    displayName = displayName,
-                    buffer = Convert.ToBase64String(audioData),     
-                    speakStartTime = speakStartTime,        
+                    email = email ?? "",
+                    displayName = displayName ?? "",
+                    buffer = Convert.ToBase64String(audioData),
+                    speakStartTime = speakStartTime,
                     speakEndTime = speakEndTime,
-                    timeSinceMeetingStart = timeSinceMeetingStart,  // Time in seconds since meeting started
-                    role = role
+                    timeSinceMeetingStart = timeSinceMeetingStart,
+                    role = string.IsNullOrEmpty(role) ? "Unknown" : role
                 };
 
                 var jsonString = System.Text.Json.JsonSerializer.Serialize(payload);
@@ -161,8 +161,8 @@ namespace EchoBot.Bot
                 var payload = new
                 {
                     type = "video",
-                    email = email,
-                    displayName = displayName,
+                    email = email ?? "",
+                    displayName = displayName ?? "",
                     buffer = Convert.ToBase64String(videoData)
                 };
 

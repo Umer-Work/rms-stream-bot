@@ -96,13 +96,10 @@ namespace EchoBot.Bot
         private bool _isWebSocketConnected = false;
 
         // Dictionary to store buffers for each speaker
-        private Dictionary<string, List<byte[]>> _speakerBuffers = new Dictionary<string, List<byte[]>>();
+        private Dictionary<string, List<(byte[] buffer, long timestamp)>> _speakerBuffers = new Dictionary<string, List<(byte[] buffer, long timestamp)>>();
         private string _currentSpeakerId = null;
         private DateTime _lastBufferTime = DateTime.MinValue;
         private const int SILENCE_THRESHOLD_MS = 500; // 500ms silence threshold
-
-        // Track when each speaker started speaking
-        private Dictionary<string, long> _speakerStartTimes = new Dictionary<string, long>();
 
         private class ParticipantInfo
         {
@@ -111,25 +108,7 @@ namespace EchoBot.Bot
             public string Email { get; set; }
         }
 
-        private Dictionary<string, ParticipantInfo> _participantInfo = new Dictionary<string, ParticipantInfo>();        // private async Task AppendToAudioTodayFile(string jsonData)
-        // {
-        //     var filePath = Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
-        //     lock (_fileLock)
-        //     {
-        //         // Ensure each JSON object is on a new line
-        //         File.AppendAllText(filePath, jsonData + Environment.NewLine);
-        //     }
-        // }
-
-        // private async Task AppendToVideoTodayFile(string jsonData)
-        // {
-        //     var filePath = Path.Combine("rawData", $"video_data_{DateTime.Now:yyyy-MM-dd}.txt");
-        //     lock (_fileLock)
-        //     {
-        //         // Ensure each JSON object is on a new line
-        //         File.AppendAllText(filePath, jsonData + Environment.NewLine);
-        //     }
-        // }
+        private Dictionary<string, ParticipantInfo> _participantInfo = new Dictionary<string, ParticipantInfo>();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BotMediaStream" /> class.
@@ -211,10 +190,7 @@ namespace EchoBot.Bot
             var ignoreTask = this.StartAudioVideoFramePlayerAsync().ForgetAndLogExceptionAsync(this.GraphLogger, "Failed to start the player");
 
             this._audioSocket.AudioSendStatusChanged += OnAudioSendStatusChanged;            
-
             this._audioSocket.AudioMediaReceived += this.OnAudioMediaReceived;
-
-            // Console.WriteLine($"[BotMediaStream] Media sockets initialized for call {callId}");
 
             if (_settings.UseSpeechService)
             {
@@ -222,15 +198,11 @@ namespace EchoBot.Bot
                 _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
             }
 
-
             this.multiViewVideoSockets = mediaSession.VideoSockets?.ToList();
             foreach (var videoSocket in this.multiViewVideoSockets)
             {
                 Console.WriteLine($"Video socket initialized with ID: {videoSocket.SocketId}");
                 videoSocket.VideoMediaReceived += this.OnVideoMediaReceived;
-                // videoSocket.VideoReceiveStatusChanged += (s, e) => {
-                //     Console.WriteLine($"Video receive status changed for socket {e.SocketId}: {e.MediaReceiveStatus}");
-                // };
             }
         }
 
@@ -345,25 +317,22 @@ namespace EchoBot.Bot
                     Marshal.Copy(buffer.Data, data, 0, (int)length);
                     
                     var speakerId = buffer.ActiveSpeakerId.ToString();
+                    var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     
                     // If speaker changed, process and send the previous speaker's buffered audio
                     if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
                     {
                         await ProcessAndSendBufferedAudio(_currentSpeakerId);
-                        // Clear the start time for the previous speaker
-                        _speakerStartTimes.Remove(_currentSpeakerId);
                     }
 
                     // Initialize buffer list for new speaker if needed
                     if (!_speakerBuffers.ContainsKey(speakerId))
                     {
-                        _speakerBuffers[speakerId] = new List<byte[]>();
-                        // Record the start time when we first get audio from this speaker
-                        _speakerStartTimes[speakerId] = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                        _speakerBuffers[speakerId] = new List<(byte[] buffer, long timestamp)>();
                     }
 
-                    // Add current buffer to speaker's buffer list
-                    _speakerBuffers[speakerId].Add(data);
+                    // Add current buffer and timestamp to speaker's buffer list
+                    _speakerBuffers[speakerId].Add((data, currentTimestamp));
                     _currentSpeakerId = speakerId;
                     _lastBufferTime = DateTime.Now;
 
@@ -446,62 +415,57 @@ namespace EchoBot.Bot
             {
                 try
                 {
+                    var bufferList = _speakerBuffers[speakerId];
+                    // Get the start timestamp in milliseconds
+                    var speakStartTimeMs = bufferList.First().timestamp;
+                    var speakEndTimeMs = bufferList.Last().timestamp;
+
+                    // Convert speak times from milliseconds to seconds
+                    var speakStartTimeSec = speakStartTimeMs / 1000;
+                    var speakEndTimeSec = speakEndTimeMs / 1000;
+
                     // Combine all buffers for this speaker
-                    var totalLength = _speakerBuffers[speakerId].Sum(b => b.Length);
+                    var totalLength = bufferList.Sum(b => b.buffer.Length);
                     var combinedBuffer = new byte[totalLength];
                     var offset = 0;
 
-                    foreach (var buffer in _speakerBuffers[speakerId])
+                    foreach (var (buffer, _) in bufferList)
                     {
                         Buffer.BlockCopy(buffer, 0, combinedBuffer, offset, buffer.Length);
                         offset += buffer.Length;
                     }
 
-                    UserDetails userDetails = null;
-
                     // Get participant info
                     if (_participantInfo.TryGetValue(speakerId, out var info))
                     {
-                        if (userDetailsMap != null)
+                        UserDetails userDetails = null;
+                        if (userDetailsMap != null && info.UserId != null)
                         {
                             userDetailsMap.TryGetValue(info.UserId, out userDetails);
                         }
 
-                        var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                        // Get the time when this speaker started speaking
-                        var speakStartTime = System.Collections.Generic.CollectionExtensions.GetValueOrDefault(_speakerStartTimes, speakerId, currentTimestamp);
-
-                        // Calculate time since meeting start (in seconds)
+                        // Calculate minutes since meeting start
                         long? timeSinceMeetingStart = null;
                         if (_meetingStartTime.HasValue)
                         {
-                            timeSinceMeetingStart = (speakStartTime * 1000) - _meetingStartTime.Value;
+                            // Convert meeting start time from milliseconds to seconds
+                            var meetingStartTimeSec = _meetingStartTime.Value / 1000;
+                            
+                            // Calculate seconds since meeting start
+                            var secondsSinceMeetingStart = speakStartTimeSec - meetingStartTimeSec;
+                            
+                            // Convert to minutes
+                            timeSinceMeetingStart = secondsSinceMeetingStart / 60;
                         }
-
-
-                        // var metadata = JsonSerializer.Serialize(new
-                        // {
-                        //     timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff"),
-                        //     activeSpeakerId = speakerId,
-                        //     userId = info.UserId,
-                        //     displayName = info.DisplayName,
-                        //     email = userDetails?.Email,
-                        //     length = totalLength,
-                        //     meetingStartTime = _meetingStartTime,
-                        //     speakStartTime = speakStartTime, 
-                        //     speakEndTime = currentTimestamp,
-                        //     timeSinceMeetingStart = timeSinceMeetingStart / 1000,  // Adding time since meeting start
-                        //     role = userDetails?.Email == _candidateEmail ? "Candidate" : "Panelist"
-                        // });
 
                         // Send both the audio data and timing information
                         await _webSocketClient.SendAudioDataAsync(
                             combinedBuffer, 
                             userDetails?.Email, 
                             info.DisplayName,
-                            speakStartTime,
-                            currentTimestamp,
-                            timeSinceMeetingStart / 1000,
+                            speakStartTimeSec * 1000,
+                            speakEndTimeSec * 1000,
+                            timeSinceMeetingStart,
                             userDetails?.Email == _candidateEmail ? "Candidate" : "Panelist"
                         );
                     }
