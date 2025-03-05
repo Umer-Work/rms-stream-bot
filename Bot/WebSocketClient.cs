@@ -24,6 +24,7 @@ namespace EchoBot.Bot
         public WebSocketClient(string serverUrl, string jwtSecret, ILogger logger)
         {
             _webSocket = new ClientWebSocket();
+            _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
             _serverUri = new Uri(serverUrl);
             _jwtSecret = jwtSecret;
             _logger = logger;
@@ -70,8 +71,9 @@ namespace EchoBot.Bot
                     _isConnected = true;
                     _logger.LogInformation("WebSocket connected successfully");
 
-                    // Start monitoring connection state
+                    // Start both monitoring and receiving
                     _ = MonitorConnectionStateAsync();
+                    _ = StartReceivingAsync();
                 }
             }
             catch (Exception ex)
