@@ -121,9 +121,9 @@ namespace EchoBot.Bot
                     email = email ?? "",
                     displayName = displayName ?? "",
                     buffer = Convert.ToBase64String(audioData),
-                    speakStartTime = speakStartTime,
-                    speakEndTime = speakEndTime,
-                    timeSinceMeetingStart = timeSinceMeetingStart,
+                    speakStartTime = speakStartTime.ToString(),
+                    speakEndTime = speakEndTime.ToString(),
+                    timeSinceMeetingStart = timeSinceMeetingStart?.ToString(),
                     role = string.IsNullOrEmpty(role) ? "Unknown" : role
                 };
 
