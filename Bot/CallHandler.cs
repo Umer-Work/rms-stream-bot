@@ -55,6 +55,7 @@ namespace EchoBot.Bot
         /// <param name="statefulCall">The stateful call.</param>
         /// <param name="settings">The settings.</param>
         /// <param name="logger"></param>
+        /// <param name="webSocketClient">WebSocket client instance</param>
         /// <param name="meetingStartTime">Optional meeting start time</param>
         /// <param name="meetingEndTime">Optional meeting end time</param>
         /// <param name="candidateEmail">Optional candidate email</param>
@@ -62,6 +63,7 @@ namespace EchoBot.Bot
             ICall statefulCall,
             AppSettings settings,
             ILogger logger,
+            WebSocketClient webSocketClient,
             long? meetingStartTime = null,
             long? meetingEndTime = null,
             string? candidateEmail = null
@@ -95,7 +97,18 @@ namespace EchoBot.Bot
             }
 
             // Create BotMediaStream before subscribing to participants
-            this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings, this.Call, this._meetingStartTime, this._meetingEndTime, this._candidateEmail); 
+            this.BotMediaStream = new BotMediaStream(
+                this.Call.GetLocalMediaSession(), 
+                this.Call.Id, 
+                this.GraphLogger, 
+                logger, 
+                settings, 
+                this.Call, 
+                webSocketClient,
+                this._meetingStartTime, 
+                this._meetingEndTime, 
+                this._candidateEmail
+            );
         }
 
         /// <inheritdoc/>
@@ -127,7 +140,7 @@ namespace EchoBot.Bot
             if (e.OldResource.State != CallState.Established && e.NewResource.State == CallState.Established)
             {
                 _meetingStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_started", _meetingStartTime.Value);
+                // No need to send meeting_started event as we already sent meeting_details
             }
 
             // Handle call termination

@@ -123,6 +123,10 @@ namespace EchoBot.Bot
         /// <param name="logger">The logger.</param>
         /// <param name="settings">Azure settings</param>
         /// <param name="call">The call instance</param>
+        /// <param name="webSocketClient">WebSocket client instance</param>
+        /// <param name="meetingStartTime">Optional meeting start time</param>
+        /// <param name="meetingEndTime">Optional meeting end time</param>
+        /// <param name="candidateEmail">Optional candidate email</param>
         /// <exception cref="InvalidOperationException">A mediaSession needs to have at least an audioSocket</exception>
         public BotMediaStream(
             ILocalMediaSession mediaSession,
@@ -131,6 +135,7 @@ namespace EchoBot.Bot
             ILogger logger,
             AppSettings settings,
             ICall call,
+            WebSocketClient webSocketClient,
             long? meetingStartTime = null,
             long? meetingEndTime = null,
             string? candidateEmail = null
@@ -141,6 +146,7 @@ namespace EchoBot.Bot
             ArgumentVerifier.ThrowOnNullArgument(logger, nameof(logger));
             ArgumentVerifier.ThrowOnNullArgument(settings, nameof(settings));
             ArgumentVerifier.ThrowOnNullArgument(call, nameof(call));
+            ArgumentVerifier.ThrowOnNullArgument(webSocketClient, nameof(webSocketClient));
 
             _settings = settings;
             _logger = logger;
@@ -148,37 +154,11 @@ namespace EchoBot.Bot
             _meetingStartTime = meetingStartTime;
             _meetingEndTime = meetingEndTime;
             _candidateEmail = candidateEmail;
+            _webSocketClient = webSocketClient;
+            _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
+            _isWebSocketConnected = true;  // Set initial connection status
 
             Console.WriteLine($"[BotMediaStream] Meeting Start Time: {meetingStartTime}, Meeting End Time: {meetingEndTime}, Candidate Email: {candidateEmail}");
-
-            // Initialize WebSocket client
-            if (string.IsNullOrEmpty(_settings.WebSocketServerUrl))
-            {
-                _logger.LogError("WebSocket server URL is not configured");
-                return;
-            }
-
-            if (string.IsNullOrEmpty(_settings.WebSocketJwtSecret))
-            {
-                _logger.LogError("WebSocket JWT secret is not configured");
-                return;
-            }
-
-            _webSocketClient = new WebSocketClient(_settings.WebSocketServerUrl, _settings.WebSocketJwtSecret, logger);
-            _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
-            
-            // Connect to WebSocket server
-            try 
-            {
-                _webSocketClient.ConnectAsync().Wait();
-                _isWebSocketConnected = true;
-                _logger.LogInformation("Successfully connected to WebSocket server");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Failed to connect to WebSocket server: {ex.Message}");
-                _isWebSocketConnected = false;
-            }
 
             // Initialize participants list
             this.participants = new List<IParticipant>();

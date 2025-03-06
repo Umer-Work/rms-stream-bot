@@ -11,6 +11,8 @@
 // </copyright>
 // <summary></summary>
 // ***********************************************************************
+using System.Text.Json.Serialization;
+
 namespace EchoBot.Models
 {
     /// <summary>
@@ -22,7 +24,44 @@ namespace EchoBot.Models
         /// Gets or sets the Teams meeting join URL.
         /// </summary>
         /// <value>The join URL.</value>
+        [JsonPropertyName("joinURL")]
         public string JoinUrl { get; set; }
+
+        /// <summary>
+        /// Gets or sets the meeting start time in Unix timestamp format (optional)
+        /// </summary>
+        [JsonPropertyName("MeetingStartTime")]
+        public long? MeetingStartTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the meeting end time in Unix timestamp format (optional)
+        /// </summary>
+        [JsonPropertyName("MeetingEndTime")]
+        public long? MeetingEndTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the meeting ID
+        /// </summary>
+        [JsonPropertyName("MeetingId")]
+        public string MeetingId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the company domain
+        /// </summary>
+        [JsonPropertyName("CompanyDomain")]
+        public string CompanyDomain { get; set; }
+
+        /// <summary>
+        /// Gets or sets the candidate's email address (optional)
+        /// </summary>
+        [JsonPropertyName("CandidateEmail")]
+        public string? CandidateEmail { get; set; }
+
+        /// <summary>
+        /// Gets or sets the MOATS questions
+        /// </summary>
+        [JsonPropertyName("MOATSQuestions")]
+        public MOATSQuestions MOATSQuestions { get; set; }
 
         /// <summary>
         /// Gets or sets the display name.
@@ -35,20 +74,5 @@ namespace EchoBot.Models
         /// </summary>
         /// <value>The display name.</value>
         public string? DisplayName { get; set; }
-
-        /// <summary>
-        /// Gets or sets the candidate's email address (optional)
-        /// </summary>
-        public string? CandidateEmail { get; set; }
-
-        /// <summary>
-        /// Gets or sets the meeting start time in Unix timestamp format (optional)
-        /// </summary>
-        public long? MeetingStartTime { get; set; }
-
-        /// <summary>
-        /// Gets or sets the meeting end time in Unix timestamp format (optional)
-        /// </summary>
-        public long? MeetingEndTime { get; set; }
     }
 }

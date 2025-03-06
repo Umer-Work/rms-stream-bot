@@ -23,6 +23,8 @@ using Microsoft.Graph.Communications.Common;
 using Microsoft.Graph.Communications.Common.Telemetry;
 using Microsoft.Graph.Communications.Resources;
 using Microsoft.Skype.Bots.Media;
+using System;
+using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
@@ -60,6 +62,11 @@ namespace EchoBot.Bot
         /// Logger for logging media platform information
         /// </summary>
         private readonly IBotMediaLogger _mediaPlatformLogger;
+
+        /// <summary>
+        /// Gets the WebSocket client instance
+        /// </summary>
+        private WebSocketClient _webSocketClient;
 
         /// <summary>
         /// Gets the collection of call handlers.
@@ -204,6 +211,50 @@ namespace EchoBot.Bot
 
             Console.WriteLine($"[BotService] Joining call with URL: {joinCallBody.JoinUrl}");
 
+            // Initialize WebSocket client if not already initialized
+            if (_webSocketClient == null)
+            {
+                if (string.IsNullOrEmpty(_settings.WebSocketServerUrl))
+                {
+                    _logger.LogError("WebSocket server URL is not configured");
+                    throw new InvalidOperationException("WebSocket server URL is not configured");
+                }
+
+                if (string.IsNullOrEmpty(_settings.WebSocketJwtSecret))
+                {
+                    _logger.LogError("WebSocket JWT secret is not configured");
+                    throw new InvalidOperationException("WebSocket JWT secret is not configured");
+                }
+
+                _webSocketClient = new WebSocketClient(
+                    _settings.WebSocketServerUrl, 
+                    _settings.WebSocketJwtSecret,
+                    joinCallBody.CompanyDomain,
+                    _logger,
+                    joinCallBody.MeetingId,
+                    joinCallBody.MeetingStartTime,
+                    joinCallBody.MeetingEndTime,
+                    joinCallBody.CandidateEmail,
+                    joinCallBody.MOATSQuestions
+                );
+                _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
+            }
+
+            // Connect to WebSocket server if not connected
+            if (!_webSocketClient.IsConnected)
+            {
+                try 
+                {
+                    await _webSocketClient.ConnectAsync();
+                    _logger.LogInformation("Successfully connected to WebSocket server");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Failed to connect to WebSocket server: {ex.Message}");
+                    throw;
+                }
+            }
+
             var joinParams = new JoinMeetingParameters(chatInfo, meetingInfo, mediaSession)
             {
                 TenantId = tenantId,
@@ -222,7 +273,6 @@ namespace EchoBot.Bot
                 };
             }
 
-            // Console.WriteLine($"[BotService] Attempting to join call...");
             if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId, out CallHandler? call))
             {
                 // Store the call details before creating the call
@@ -291,6 +341,22 @@ namespace EchoBot.Bot
         }
 
         /// <summary>
+        /// Handler for WebSocket connection closed event
+        /// </summary>
+        private void WebSocketClient_ConnectionClosed(object sender, EventArgs e)
+        {
+            _logger.LogWarning("WebSocket connection closed");
+        }
+
+        /// <summary>
+        /// Gets the WebSocket client instance
+        /// </summary>
+        public WebSocketClient GetWebSocketClient()
+        {
+            return _webSocketClient;
+        }
+
+        /// <summary>
         /// Incoming call handler.
         /// </summary>
         /// <param name="sender">The sender.</param>
@@ -352,28 +418,32 @@ namespace EchoBot.Bot
             {
                 var threadId = call.Resource.ChatInfo.ThreadId;
                 
-                // Get the stored call details if they exist
+                // Try to get the pending call details
                 var (startTime, endTime, candidateEmail) = _pendingCallDetails.TryGetValue(threadId, out var details) 
                     ? details 
                     : (null, null, null);
 
-                var callHandler = new CallHandler(call, _settings, _logger, startTime, endTime, candidateEmail);
-                this.CallHandlers[threadId] = callHandler;
-
-                // Clean up stored details
+                // Remove from pending details since we're handling it now
                 _pendingCallDetails.Remove(threadId);
+
+                // Add the call to the list of calls
+                this.CallHandlers[threadId] = new CallHandler(
+                    call,
+                    _settings,
+                    _logger,
+                    _webSocketClient,
+                    startTime,
+                    endTime,
+                    candidateEmail
+                );
             }
 
             foreach (var call in args.RemovedResources)
             {
                 var threadId = call.Resource.ChatInfo.ThreadId;
-                if (this.CallHandlers.TryRemove(threadId, out CallHandler? handler))
+                if (this.CallHandlers.TryRemove(threadId, out CallHandler handler))
                 {
-                    _pendingCallDetails.Remove(threadId); // Clean up any remaining details
-                    Task.Run(async () => {
-                        await handler.BotMediaStream.ShutdownAsync();
-                        handler.Dispose();
-                    });
+                    handler.Dispose();
                 }
             }
         }

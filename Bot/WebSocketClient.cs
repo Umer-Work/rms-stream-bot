@@ -7,29 +7,51 @@ using Microsoft.Extensions.Logging;
 using System.IO;
 using JWT.Algorithms;
 using JWT.Builder;
+using EchoBot.Models;
 
 namespace EchoBot.Bot
 {
     public class WebSocketClient : IDisposable
     {
-        private readonly ClientWebSocket _webSocket;
-        private readonly Uri _serverUri;
-        private readonly ILogger _logger;
-        private readonly CancellationTokenSource _cancellationTokenSource;
+        private readonly string _serverUrl;
         private readonly string _jwtSecret;
+        private readonly string _companyDomain;
+        private readonly ILogger _logger;
+        private ClientWebSocket _webSocket;
+        private CancellationTokenSource _cancellationTokenSource;
         private bool _isConnected;
-        
+
+        // Store meeting details
+        private string _meetingId;
+        private long? _meetingStartTime;
+        private long? _meetingEndTime;
+        private string _candidateEmail;
+        private MOATSQuestions _moatsQuestions;
+
+        public bool IsConnected => _isConnected && _webSocket?.State == WebSocketState.Open;
+
         public event EventHandler ConnectionClosed;
 
-        public WebSocketClient(string serverUrl, string jwtSecret, ILogger logger)
+        public WebSocketClient(
+            string serverUrl,
+            string jwtSecret,
+            string companyDomain,
+            ILogger logger,
+            string meetingId = null,
+            long? meetingStartTime = null,
+            long? meetingEndTime = null,
+            string candidateEmail = null,
+            MOATSQuestions moatsQuestions = null)
         {
-            _webSocket = new ClientWebSocket();
-            _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-            _serverUri = new Uri(serverUrl);
+            _serverUrl = serverUrl;
             _jwtSecret = jwtSecret;
+            _companyDomain = companyDomain;
             _logger = logger;
-            _cancellationTokenSource = new CancellationTokenSource();
-            _isConnected = false;
+            _meetingId = meetingId;
+            _meetingStartTime = meetingStartTime;
+            _meetingEndTime = meetingEndTime;
+            _candidateEmail = candidateEmail;
+            _moatsQuestions = moatsQuestions;
         }
 
         private string GenerateJwtToken()
@@ -40,6 +62,7 @@ namespace EchoBot.Bot
                     .WithAlgorithm(new HMACSHA256Algorithm())
                     .WithSecret(_jwtSecret)
                     .AddClaim("type", "teams-bot")
+                    .AddClaim("companyDomain", _companyDomain)
                     .AddClaim("iat", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                     .AddClaim("exp", DateTimeOffset.UtcNow.AddHours(24).ToUnixTimeSeconds())
                     .Encode();
@@ -58,30 +81,61 @@ namespace EchoBot.Bot
         {
             try
             {
-                if (_webSocket.State != WebSocketState.Open)
-                {
-                    // Generate JWT token
-                    var token = GenerateJwtToken();
+                _webSocket = new ClientWebSocket();
+                _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+                _cancellationTokenSource = new CancellationTokenSource();
+                var uri = new Uri(_serverUrl);
 
-                    // Add token to Authorization header
-                    _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
-                    
-                    _logger.LogInformation($"Connecting to WebSocket at {_serverUri}");
-                    await _webSocket.ConnectAsync(_serverUri, _cancellationTokenSource.Token);
-                    _isConnected = true;
-                    _logger.LogInformation("WebSocket connected successfully");
+                // Generate JWT token
+                var token = GenerateJwtToken();
+                _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+                
+                Console.WriteLine($"Connecting to WebSocket at {uri}");
+                await _webSocket.ConnectAsync(uri, _cancellationTokenSource.Token);
+                _isConnected = true;
+                Console.WriteLine("WebSocket connected successfully");
 
-                    // Start both monitoring and receiving
-                    _ = MonitorConnectionStateAsync();
-                    _ = StartReceivingAsync();
-                }
+                // Send meeting details immediately after connection
+                await SendMeetingDetailsEvent();
+
+                // Start receiving messages
+                _ = StartReceivingAsync();
             }
             catch (Exception ex)
             {
                 _logger.LogError($"WebSocket connection error: {ex.Message}");
                 _isConnected = false;
-                OnConnectionClosed();
                 throw;
+            }
+        }
+
+        private async Task SendMeetingDetailsEvent()
+        {
+            try
+            {
+                var payload = new
+                {
+                    type = "meeting_details",
+                    meetingId = _meetingId,
+                    meetingStartTime = _meetingStartTime,
+                    meetingEndTime = _meetingEndTime,
+                    candidateEmail = _candidateEmail ?? "",
+                    moatsQuestions = _moatsQuestions ?? new MOATSQuestions()
+                };
+
+                var message = System.Text.Json.JsonSerializer.Serialize(payload);
+                var messageBytes = Encoding.UTF8.GetBytes(message);
+                await _webSocket.SendAsync(
+                    new ArraySegment<byte>(messageBytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    _cancellationTokenSource.Token);
+
+                Console.WriteLine($"Sent meeting details event for meeting {_meetingId}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to send meeting details event: {ex.Message}");
             }
         }
 
@@ -199,10 +253,9 @@ namespace EchoBot.Bot
             {
                 var payload = new
                 {
-                    type = "meeting_event",
-                    eventType = eventType,
-                    startTime = startTime,
-                    endTime = endTime
+                    type = eventType,
+                    startTime = startTime.ToString(),
+                    endTime = endTime?.ToString()
                 };
 
                 var jsonString = System.Text.Json.JsonSerializer.Serialize(payload);
@@ -224,6 +277,38 @@ namespace EchoBot.Bot
                 }
                 throw;
             }
+        }
+
+        public async Task SendMeetingDetailsAsync(string meetingId, long startTime, long endTime, string candidateEmail)
+        {
+            if (!IsConnected)
+            {
+                _logger.LogWarning("Cannot send meeting details - WebSocket is not connected");
+                return;
+            }
+
+            var payload = new
+            {
+                type = "meeting_details",
+                meetingId,
+                meetingStartTime = startTime,
+                meetingEndTime = endTime,
+                candidateEmail = candidateEmail ?? ""
+            };
+
+            var message = System.Text.Json.JsonSerializer.Serialize(payload);
+            await SendMessageAsync(message);
+            _logger.LogInformation($"Sent meeting details for meeting {meetingId}");
+        }
+
+        private async Task SendMessageAsync(string message)
+        {
+            var messageBytes = Encoding.UTF8.GetBytes(message);
+            await _webSocket.SendAsync(
+                new ArraySegment<byte>(messageBytes),
+                WebSocketMessageType.Text,
+                true,
+                _cancellationTokenSource.Token);
         }
 
         public async Task StartReceivingAsync()
@@ -266,16 +351,16 @@ namespace EchoBot.Bot
 
         public void Dispose()
         {
-            _cancellationTokenSource.Cancel();
-            if (_webSocket.State == WebSocketState.Open)
+            _cancellationTokenSource?.Cancel();
+            if (_webSocket?.State == WebSocketState.Open)
             {
                 _webSocket.CloseAsync(
                     WebSocketCloseStatus.NormalClosure,
                     "Closing connection",
                     CancellationToken.None).Wait();
             }
-            _webSocket.Dispose();
-            _cancellationTokenSource.Dispose();
+            _webSocket?.Dispose();
+            _cancellationTokenSource?.Dispose();
         }
     }
 }
