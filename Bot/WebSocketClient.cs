@@ -8,6 +8,7 @@ using System.IO;
 using JWT.Algorithms;
 using JWT.Builder;
 using EchoBot.Models;
+using Microsoft.Skype.Bots.Media;
 
 namespace EchoBot.Bot
 {
@@ -27,6 +28,9 @@ namespace EchoBot.Bot
         private long? _meetingEndTime;
         private string _candidateEmail;
         private MOATSQuestions _moatsQuestions;
+
+        // Video streaming related fields
+        private int _frameIndex = 0;
 
         public bool IsConnected => _isConnected && _webSocket?.State == WebSocketState.Open;
 
@@ -177,7 +181,7 @@ namespace EchoBot.Bot
                     buffer = Convert.ToBase64String(audioData),
                     speakStartTime = speakStartTime.ToString(),
                     speakEndTime = speakEndTime.ToString(),
-                    timeSinceMeetingStart = timeSinceMeetingStart?.ToString(),
+                    // timeSinceMeetingStart = timeSinceMeetingStart?.ToString(),
                     role = string.IsNullOrEmpty(role) ? "Unknown" : role
                 };
 
@@ -202,7 +206,7 @@ namespace EchoBot.Bot
             }
         }
 
-        public async Task SendVideoDataAsync(byte[] videoData, string email, string displayName)
+        public async Task SendVideoDataAsync(byte[] videoData, VideoFormat format, VideoFormat originalFormat)
         {
             if (!_isConnected || _webSocket.State != WebSocketState.Open)
             {
@@ -215,9 +219,24 @@ namespace EchoBot.Bot
                 var payload = new
                 {
                     type = "video",
-                    email = email ?? "",
-                    displayName = displayName ?? "",
-                    buffer = Convert.ToBase64String(videoData)
+                    buffer = Convert.ToBase64String(videoData),
+                    metadata = new
+                    {
+                        format = new
+                        {
+                            Width = format.Width,
+                            Height = format.Height,
+                            FrameRate = format.FrameRate
+                        },
+                        originalFormat = originalFormat != null ? new
+                        {
+                            Width = originalFormat.Width,
+                            Height = originalFormat.Height,
+                            FrameRate = originalFormat.FrameRate
+                        } : null,
+                        timestamp = DateTime.Now,
+                        frameIndex = _frameIndex++
+                    }
                 };
 
                 var jsonString = System.Text.Json.JsonSerializer.Serialize(payload);

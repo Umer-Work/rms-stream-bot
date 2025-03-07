@@ -323,7 +323,7 @@ namespace EchoBot.Bot
                     new VideoSocketSettings
                     {
                         StreamDirections = StreamDirection.Recvonly,
-                        ReceiveColorFormat = VideoColorFormat.NV12,
+                        ReceiveColorFormat = VideoColorFormat.H264,
                         SupportedSendVideoFormats = new List<VideoFormat>
                         {
                             VideoFormat.H264_320x180_15Fps, // Required minimum resolution

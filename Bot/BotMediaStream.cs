@@ -26,6 +26,7 @@ using System.Text.Json;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 
+
 namespace EchoBot.Bot
 {
     /// <summary>
@@ -475,65 +476,11 @@ namespace EchoBot.Bot
 
             try 
             {
-                var participant = _call.Participants.SingleOrDefault(x => 
-                    x.Resource.IsInLobby == false && 
-                    x.Resource.MediaStreams.Any(y => y.SourceId == e.Buffer.MediaSourceId.ToString()));
-
-                if (participant != null)
-                {
-                    var identity = participant.Resource?.Info?.Identity?.User;
-                    if (identity?.Id == null)
-                    {
-                        return;
-                    }
-
-                    // If we haven't identified the candidate yet, check if this participant might be them
-                    if (_candidateUserId == null && userDetailsMap != null)
-                    {
-                        // The participant without an email in userDetailsMap is our candidate
-                        var isInUserDetailsMap = userDetailsMap.TryGetValue(identity.Id, out var details);
-                        if (!isInUserDetailsMap || details.Email == "No email")
-                        {
-                            _candidateUserId = identity.Id;
-                            _logger.LogInformation($"[BotMediaStream] Identified candidate user with ID: {_candidateUserId}");
-                        }
-                    }
-
-                    // Only process video if this is the candidate
-                    if (identity.Id == _candidateUserId)
-                    {
-                        // Check if enough time has passed since last send for this participant
-                        var now = DateTime.Now;
-                        var shouldSend = false;
-
-                        if (_lastVideoSendTime.TryGetValue(identity.Id, out DateTime lastSendTime))
-                        {
-                            var timeSinceLastSend = now - lastSendTime;
-                            shouldSend = timeSinceLastSend.TotalSeconds >= VIDEO_STREAM_INTERVAL;
-                        }
-                        else
-                        {
-                            // For first time, set the initial time and don't send immediately
-                            _lastVideoSendTime[identity.Id] = now;
-                            return;
-                        }
-
-                        if (!shouldSend)
-                        {
-                            return;
-                        }
-
-                        var length = e.Buffer.Length;
-                        var data = new byte[length];
-                        Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
-
-                        // Send to WebSocket server
-                        await _webSocketClient.SendVideoDataAsync(data, _candidateEmail, identity?.DisplayName);
-                        
-                        // Update last send time for this participant
-                        _lastVideoSendTime[identity.Id] = now;
-                    }
-                }
+                byte[] buffer = new byte[e.Buffer.Length];
+                Marshal.Copy(e.Buffer.Data, buffer, 0, (int)e.Buffer.Length);
+                // Send to WebSocket server
+                await _webSocketClient.SendVideoDataAsync(buffer, e.Buffer.VideoFormat, e.Buffer.OriginalVideoFormat);
+          
             }
             catch (Exception ex)
             {
