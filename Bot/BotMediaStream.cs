@@ -87,7 +87,7 @@ namespace EchoBot.Bot
         /// <summary>
         /// The media stream
         /// </summary>
-        private readonly List<IVideoSocket> multiViewVideoSockets;
+        private readonly IVideoSocket videoSocket;
         private readonly ILogger _logger;
         private AudioVideoFramePlayer audioVideoFramePlayer;
         private readonly TaskCompletionSource<bool> audioSendStatusActive;
@@ -183,10 +183,11 @@ namespace EchoBot.Bot
                 _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
             }
 
-            this.multiViewVideoSockets = mediaSession.VideoSockets?.ToList();
-            foreach (var videoSocket in this.multiViewVideoSockets)
+            // Get single video socket
+            this.videoSocket = mediaSession.VideoSockets?.FirstOrDefault();
+            if (this.videoSocket != null)
             {
-                Console.WriteLine($"Video socket initialized with ID: {videoSocket.SocketId}");
+                Console.WriteLine($"[BotMediaStream] Initialized single video socket with ID: {videoSocket.SocketId}");
                 videoSocket.VideoMediaReceived += this.OnVideoMediaReceived;
             }
         }
@@ -507,19 +508,18 @@ namespace EchoBot.Bot
         /// <summary>
         /// Subscribe to a participant's video
         /// </summary>
-        public void Subscribe(MediaType mediaType, uint msi, VideoResolution resolution, uint socketId)
+        public void Subscribe(MediaType mediaType, uint msi, VideoResolution resolution)
         {
             try
             {
-                var videoSocket = this.multiViewVideoSockets.FirstOrDefault(s => s.SocketId == socketId);
                 if (videoSocket != null)
                 {
-                    Console.WriteLine($"[BotMediaStream] Subscribing MSI {msi} to socket {socketId}");
+                    Console.WriteLine($"[BotMediaStream] Subscribing MSI {msi} to socket {videoSocket.SocketId}");
                     videoSocket.Subscribe(resolution, msi);  
                 }
                 else
                 {
-                    Console.WriteLine($"[BotMediaStream] Socket {socketId} not found for subscription");
+                    Console.WriteLine($"[BotMediaStream] No video socket available for subscription");
                 }
             }
             catch (Exception ex)
