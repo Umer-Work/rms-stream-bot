@@ -229,7 +229,7 @@ namespace EchoBot.Bot
                 _webSocketClient = new WebSocketClient(
                     _settings.WebSocketServerUrl, 
                     _settings.WebSocketJwtSecret,
-                    joinCallBody.CompanyDomain,
+                    joinCallBody.CompanyId,
                     _logger,
                     joinCallBody.MeetingId,
                     joinCallBody.MeetingStartTime,

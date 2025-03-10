@@ -16,7 +16,7 @@ namespace EchoBot.Bot
     {
         private readonly string _serverUrl;
         private readonly string _jwtSecret;
-        private readonly string _companyDomain;
+        private readonly string _companyId;
         private readonly ILogger _logger;
         private ClientWebSocket _webSocket;
         private CancellationTokenSource _cancellationTokenSource;
@@ -39,7 +39,7 @@ namespace EchoBot.Bot
         public WebSocketClient(
             string serverUrl,
             string jwtSecret,
-            string companyDomain,
+            string companyId,
             ILogger logger,
             string meetingId = null,
             long? meetingStartTime = null,
@@ -49,7 +49,7 @@ namespace EchoBot.Bot
         {
             _serverUrl = serverUrl;
             _jwtSecret = jwtSecret;
-            _companyDomain = companyDomain;
+            _companyId = companyId;
             _logger = logger;
             _meetingId = meetingId;
             _meetingStartTime = meetingStartTime;
@@ -66,7 +66,7 @@ namespace EchoBot.Bot
                     .WithAlgorithm(new HMACSHA256Algorithm())
                     .WithSecret(_jwtSecret)
                     .AddClaim("type", "teams-bot")
-                    .AddClaim("companyDomain", _companyDomain)
+                    .AddClaim("companyId", _companyId)
                     .AddClaim("iat", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
                     .AddClaim("exp", DateTimeOffset.UtcNow.AddHours(24).ToUnixTimeSeconds())
                     .Encode();

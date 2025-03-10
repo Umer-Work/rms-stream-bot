@@ -46,10 +46,10 @@ namespace EchoBot.Models
         public string MeetingId { get; set; }
 
         /// <summary>
-        /// Gets or sets the company domain
+        /// Gets or sets the company ID
         /// </summary>
-        [JsonPropertyName("CompanyDomain")]
-        public string CompanyDomain { get; set; }
+        [JsonPropertyName("CompanyId")]
+        public string CompanyId { get; set; }
 
         /// <summary>
         /// Gets or sets the candidate's email address (optional)
