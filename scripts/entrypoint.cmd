@@ -47,8 +47,8 @@ echo Setup: Adding bindings
 netsh http add urlacl url=https://+:%AppSettings__BotCallingInternalPort%/ sddl=D:(A;;GX;;;S-1-1-0) > nul && ^
 netsh http add urlacl url=https://+:%AppSettings__MediaInternalPort%/ sddl=D:(A;;GX;;;S-1-1-0) > nul && ^
 netsh http add urlacl url=http://+:%CallSignalingPort2%/ sddl=D:(A;;GX;;;S-1-1-0) > nul && ^
-netsh http add sslcert ipport=0.0.0.0:%AppSettings__BotCallingInternalPort% certhash=%AppSettings__CertificateThumbprint% appid={4c694f8d-1097-4b18-9419-711b2feaa66d} > nul && ^
-netsh http add sslcert ipport=0.0.0.0:%AppSettings__MediaInternalPort% certhash=%AppSettings__CertificateThumbprint% appid={4c694f8d-1097-4b18-9419-711b2feaa66d} > nul
+netsh http add sslcert ipport=0.0.0.0:%AppSettings__BotCallingInternalPort% certhash=%AppSettings__CertificateThumbprint% appid=%AppSettings__AadAppId% > nul && ^
+netsh http add sslcert ipport=0.0.0.0:%AppSettings__MediaInternalPort% certhash=%AppSettings__CertificateThumbprint% appid=%AppSettings__AadAppId% > nul
 
 if errorlevel 1 (
    echo Setup: Failed to add URL ACLs and certificate bings.
