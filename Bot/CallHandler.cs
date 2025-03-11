@@ -277,19 +277,11 @@ namespace EchoBot.Bot
 
                         json = updateParticipant(this.BotMediaStream.participants, participant, added, participantDetails.DisplayName);
                         
-                        // Subscribe to video only if this is a candidate and we haven't subscribed to anyone yet
-                        if (added && isCandidate && !hasSubscribedToCandidate)
+                        if (added && isCandidate)
                         {
-                            try
-                            {
-                                Console.WriteLine($"[CallHandler] Found candidate participant: {participantDetails.DisplayName}");
-                                SubscribeToParticipantVideo(participant);
-                                hasSubscribedToCandidate = true;
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[CallHandler] Error subscribing to candidate video: {ex.Message}");
-                            }
+                            Console.WriteLine($"[CallHandler] Found candidate participant: {participantDetails.DisplayName}");
+                            subscribedParticipantId = participant.Id;
+                            SubscribeToParticipantVideo(participant);
                         }
                     }
                     else if (participant?.Resource?.Info?.Identity?.AdditionalData?.Count > 0)
@@ -298,12 +290,11 @@ namespace EchoBot.Bot
                         {
                             json = updateParticipant(this.BotMediaStream.participants, participant, added);
                             
-                            // If we haven't found a candidate yet, treat this participant as a potential candidate
-                            if (added && !hasSubscribedToCandidate)
+                            if (added)
                             {
                                 Console.WriteLine($"[CallHandler] Found potential candidate participant without user details");
+                                subscribedParticipantId = participant.Id;
                                 SubscribeToParticipantVideo(participant);
-                                hasSubscribedToCandidate = true;
                             }
                         }
                     }
@@ -354,7 +345,8 @@ namespace EchoBot.Bot
         {
             try
             {
-                if (sender.Id == subscribedParticipantId)
+                // Always check for video stream changes for the candidate participant
+                if (sender.Id == subscribedParticipantId || !hasSubscribedToCandidate)
                 {
                     var oldMediaStreams = args.OldResource?.MediaStreams;
                     var newMediaStreams = args.NewResource?.MediaStreams;
@@ -407,12 +399,15 @@ namespace EchoBot.Bot
                 }
                 else
                 {
-                    Console.WriteLine($"[CallHandler] No video stream available for participant {participant.Id}");
+                    Console.WriteLine($"[CallHandler] No video stream available for participant {participant.Id}, will retry when stream becomes available");
+                    // Don't set hasSubscribedToCandidate to true until we actually get the stream
+                    hasSubscribedToCandidate = false;
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[CallHandler] Error subscribing to participant video: {ex.Message}");
+                hasSubscribedToCandidate = false;
             }
         }
 
