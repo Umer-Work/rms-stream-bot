@@ -47,6 +47,8 @@ namespace EchoBot.Bot
         private long? _meetingEndTime;
         private string? _candidateEmail;
 
+        private string? subscribedParticipantId = null;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
         /// </summary>
@@ -133,6 +135,23 @@ namespace EchoBot.Bot
         private async void CallOnUpdated(ICall sender, ResourceEventArgs<Call> e)
         {
             GraphLogger.Info($"Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
+
+            // Check for participant media state changes
+            foreach (var participant in sender.Participants)
+            {
+                if (participant.Id == subscribedParticipantId)
+                {
+                    var videoStream = participant.Resource.MediaStreams?.FirstOrDefault(x => 
+                        x.MediaType == Modality.Video && 
+                        (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
+
+                    if (videoStream != null)
+                    {
+                        // Re-subscribe if this is our candidate and they have video available
+                        SubscribeToParticipantVideo(participant);
+                    }
+                }
+            }
 
             // Handle call establishment
             if (e.OldResource.State != CallState.Established && e.NewResource.State == CallState.Established)
@@ -303,13 +322,68 @@ namespace EchoBot.Bot
         /// <param name="args">Event args containing added and removed participants.</param>
         public void ParticipantsOnUpdated(IParticipantCollection sender, CollectionEventArgs<IParticipant> args)
         {
-            // Console.WriteLine($"[CallHandler] Participants updated - Added: {args.AddedResources.Count}, Removed: {args.RemovedResources.Count}");
-            // foreach (var participant in args.AddedResources)
-            // {
-            //     Console.WriteLine($"[CallHandler] Participant added: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
-            // }
+            // Handle added participants
+            foreach (var participant in args.AddedResources)
+            {
+                Console.WriteLine($"[CallHandler] Participant added: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
+                // Monitor participant's media streams
+                participant.OnUpdated += Participant_OnUpdated;
+            }
+
+            // Handle removed participants
+            foreach (var participant in args.RemovedResources)
+            {
+                Console.WriteLine($"[CallHandler] Participant removed: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
+                participant.OnUpdated -= Participant_OnUpdated;
+                
+                if (participant.Id == subscribedParticipantId)
+                {
+                    hasSubscribedToCandidate = false;
+                    subscribedParticipantId = null;
+                }
+            }
+
             updateParticipants(args.AddedResources);
             updateParticipants(args.RemovedResources, false);
+        }
+
+        /// <summary>
+        /// Handle participant updates (including media state changes)
+        /// </summary>
+        private void Participant_OnUpdated(IParticipant sender, ResourceEventArgs<Participant> args)
+        {
+            try
+            {
+                if (sender.Id == subscribedParticipantId)
+                {
+                    var oldMediaStreams = args.OldResource?.MediaStreams;
+                    var newMediaStreams = args.NewResource?.MediaStreams;
+
+                    var oldVideoStream = oldMediaStreams?.FirstOrDefault(x =>
+                        x.MediaType == Modality.Video &&
+                        (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
+
+                    var newVideoStream = newMediaStreams?.FirstOrDefault(x =>
+                        x.MediaType == Modality.Video &&
+                        (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
+
+                    // Log the change in video state
+                    Console.WriteLine($"[CallHandler] Video state change for participant {sender.Id}:");
+                    Console.WriteLine($"  Old video stream: {(oldVideoStream != null ? oldVideoStream.SourceId : "none")}");
+                    Console.WriteLine($"  New video stream: {(newVideoStream != null ? newVideoStream.SourceId : "none")}");
+
+                    // If video stream becomes available or changes
+                    if (newVideoStream != null && (oldVideoStream == null || oldVideoStream.SourceId != newVideoStream.SourceId))
+                    {
+                        Console.WriteLine($"[CallHandler] Detected new video stream, attempting to subscribe");
+                        SubscribeToParticipantVideo(sender);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CallHandler] Error in Participant_OnUpdated: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -326,8 +400,14 @@ namespace EchoBot.Bot
                 if (videoStream != null)
                 {
                     var msi = uint.Parse(videoStream.SourceId);
-                    Console.WriteLine($"[CallHandler] Subscribing to candidate video for participant {participant.Id}");
+                    Console.WriteLine($"[CallHandler] Subscribing to candidate video for participant {participant.Id} with MSI {msi}");
                     this.BotMediaStream.Subscribe(MediaType.Video, msi, VideoResolution.HD1080p);
+                    subscribedParticipantId = participant.Id;
+                    hasSubscribedToCandidate = true;
+                }
+                else
+                {
+                    Console.WriteLine($"[CallHandler] No video stream available for participant {participant.Id}");
                 }
             }
             catch (Exception ex)

@@ -25,7 +25,7 @@ using System.IO;
 using System.Text.Json;
 using System.Collections.Generic;
 using Newtonsoft.Json;
-
+using System.Collections;
 
 namespace EchoBot.Bot
 {
@@ -52,6 +52,16 @@ namespace EchoBot.Bot
         /// Dictionary to track last video send time for each participant
         /// </summary>
         private readonly Dictionary<string, DateTime> _lastVideoSendTime = new Dictionary<string, DateTime>();
+
+        /// <summary>
+        /// Dictionary to track video stream state for participants
+        /// </summary>
+        private readonly Dictionary<string, bool> _participantVideoState = new Dictionary<string, bool>();
+
+        /// <summary>
+        /// Dictionary to track MSI history for participants
+        /// </summary>
+        private readonly Dictionary<string, HashSet<uint>> _participantMsiHistory = new Dictionary<string, HashSet<uint>>();
 
         /// <summary>
         /// The participants
@@ -447,15 +457,18 @@ namespace EchoBot.Bot
                             timeSinceMeetingStart = secondsSinceMeetingStart / 60;
                         }
 
+                        var role = string.IsNullOrEmpty(userDetails?.Email) ? "Candidate" : "Panelist";
+                        var email = userDetails?.Email ?? _candidateEmail ?? "";
+                        var displayName = info.DisplayName ?? "Unknown";
+
                         // Send both the audio data and timing information
                         await _webSocketClient.SendAudioDataAsync(
-                            combinedBuffer, 
-                            userDetails?.Email ?? _candidateEmail, 
-                            info.DisplayName,
-                            speakStartTimeSec * 1000,
-                            speakEndTimeSec * 1000,
-                            timeSinceMeetingStart,
-                            string.IsNullOrEmpty(userDetails?.Email) ? "Candidate" : "Panelist"
+                            combinedBuffer,
+                            email,
+                            displayName,
+                            speakStartTimeMs,  // Use milliseconds timestamp
+                            speakEndTimeMs,    // Use milliseconds timestamp
+                            role
                         );
                     }
                 }
@@ -473,19 +486,31 @@ namespace EchoBot.Bot
 
         private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
         {
-            if (!_isWebSocketConnected) return;
+            if (!_isWebSocketConnected) 
+            {
+                Console.WriteLine("[BotMediaStream] WebSocket not connected, skipping video frame");
+                return;
+            }
 
             try 
             {
+                // Track that we're receiving video for this MSI
+                string msiKey = e.Buffer.MediaSourceId.ToString();
+                _participantVideoState[msiKey] = true;
+
                 byte[] buffer = new byte[e.Buffer.Length];
                 Marshal.Copy(e.Buffer.Data, buffer, 0, (int)e.Buffer.Length);
+                
                 // Send to WebSocket server
                 await _webSocketClient.SendVideoDataAsync(buffer, e.Buffer.VideoFormat, e.Buffer.OriginalVideoFormat);
           
+                // Log video frame details
+                Console.WriteLine($"[BotMediaStream] Received video frame: MSI={e.Buffer.MediaSourceId}, Format={e.Buffer.VideoFormat}, Size={buffer.Length} bytes");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing video data");
+                _logger.LogError(ex, $"Error processing video data: {ex.Message}");
+                Console.WriteLine($"[BotMediaStream] Video processing error: {ex.Message}");
             }
             finally
             {
@@ -514,8 +539,28 @@ namespace EchoBot.Bot
             {
                 if (videoSocket != null)
                 {
-                    Console.WriteLine($"[BotMediaStream] Subscribing MSI {msi} to socket {videoSocket.SocketId}");
-                    videoSocket.Subscribe(resolution, msi);  
+                    // Log subscription attempt
+                    Console.WriteLine($"[BotMediaStream] Attempting to subscribe to MSI {msi} on socket {videoSocket.SocketId}");
+
+                    // Unsubscribe from any existing subscription on this socket
+                    try
+                    {
+                        videoSocket.Unsubscribe();
+                        Console.WriteLine($"[BotMediaStream] Unsubscribed from previous stream on socket {videoSocket.SocketId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[BotMediaStream] Error unsubscribing from previous stream: {ex.Message}");
+                    }
+
+                    // Subscribe to the new MSI
+                    videoSocket.Subscribe(resolution, msi);
+                    
+                    // Track that we're subscribed to this MSI
+                    string msiKey = msi.ToString();
+                    _participantVideoState[msiKey] = true;
+                    
+                    Console.WriteLine($"[BotMediaStream] Successfully subscribed to video stream MSI {msi}");
                 }
                 else
                 {
@@ -525,6 +570,7 @@ namespace EchoBot.Bot
             catch (Exception ex)
             {
                 Console.WriteLine($"[BotMediaStream] Error in Subscribe: {ex.Message}");
+                Console.WriteLine($"[BotMediaStream] Stack trace: {ex.StackTrace}");
             }
         }
     }
