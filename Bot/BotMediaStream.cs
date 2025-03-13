@@ -187,11 +187,11 @@ namespace EchoBot.Bot
             this._audioSocket.AudioSendStatusChanged += OnAudioSendStatusChanged;            
             this._audioSocket.AudioMediaReceived += this.OnAudioMediaReceived;
 
-            if (_settings.UseSpeechService)
-            {
-                _languageService = new SpeechService(_settings, _logger);
-                _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
-            }
+            // if (_settings.UseSpeechService)
+            // {
+            //     _languageService = new SpeechService(_settings, _logger);
+            //     _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
+            // }
 
             // Get single video socket
             this.videoSocket = mediaSession.VideoSockets?.FirstOrDefault();
@@ -318,7 +318,6 @@ namespace EchoBot.Bot
                     var speakerId = buffer.ActiveSpeakerId.ToString();
                     var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     
-                    // If speaker changed, process and send the previous speaker's buffered audio
                     if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
                     {
                         await ProcessAndSendBufferedAudio(_currentSpeakerId);
@@ -379,23 +378,23 @@ namespace EchoBot.Bot
                     }
                 }
 
-                if (_languageService != null)
-                {
-                    await _languageService.AppendAudioBuffer(e.Buffer);
-                }
-                else
-                {
-                    var length = e.Buffer.Length;
-                    if (length > 0)
-                    {
-                        var buffer = new byte[length];
-                        Marshal.Copy(e.Buffer.Data, buffer, 0, (int)length);
+                // if (_languageService != null)
+                // {
+                //     await _languageService.AppendAudioBuffer(e.Buffer);
+                // }
+                // else
+                // {
+                //     var length = e.Buffer.Length;
+                //     if (length > 0)
+                //     {
+                //         var buffer = new byte[length];
+                //         Marshal.Copy(e.Buffer.Data, buffer, 0, (int)length);
 
-                        var currentTick = DateTime.Now.Ticks;
-                        this.audioMediaBuffers = Util.Utilities.CreateAudioMediaBuffers(buffer, currentTick, _logger);
-                        await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>());
-                    }
-                }
+                //         var currentTick = DateTime.Now.Ticks;
+                //         this.audioMediaBuffers = Util.Utilities.CreateAudioMediaBuffers(buffer, currentTick, _logger);
+                //         await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>());
+                //     }
+                // }
             }
             catch (Exception ex)
             {
@@ -518,11 +517,12 @@ namespace EchoBot.Bot
             }
         }
 
-        private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)
-        {
-            this.audioMediaBuffers = e.AudioMediaBuffers;
-            var result = Task.Run(async () => await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>())).GetAwaiter();
-        }
+        // private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)
+        // {
+        //     // Skip enqueueing any audio buffers to prevent sending audio
+        //     // We don't store or enqueue the buffers, effectively preventing audio transmission
+        //     _logger.LogTrace("Skipping audio buffer enqueue to maintain muted state");
+        // }
 
         private void WebSocketClient_ConnectionClosed(object sender, EventArgs e)
         {
