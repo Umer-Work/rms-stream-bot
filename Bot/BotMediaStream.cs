@@ -222,7 +222,24 @@ namespace EchoBot.Bot
                 return;
             }
 
+            // First unsubscribe from video socket to stop video streaming
+            try
+            {
+                if (videoSocket != null)
+                {
+                    videoSocket.Unsubscribe();
+                    Console.WriteLine($"[BotMediaStream] Unsubscribed from video socket during shutdown");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error unsubscribing from video socket during shutdown: {ex.Message}");
+            }
+
             await this.startVideoPlayerCompleted.Task.ConfigureAwait(false);
+
+            // Clear video states
+            _participantVideoState.Clear();
 
             // unsubscribe
             if (this._audioSocket != null)
@@ -236,8 +253,7 @@ namespace EchoBot.Bot
                 await this.audioVideoFramePlayer.ShutdownAsync().ConfigureAwait(false);
             }
 
-            // make sure all the audio and video buffers are disposed, it can happen that,
-            // the buffers were not enqueued but the call was disposed if the caller hangs up quickly
+            // make sure all the audio and video buffers are disposed
             foreach (var audioMediaBuffer in this.audioMediaBuffers)
             {
                 audioMediaBuffer.Dispose();
@@ -246,6 +262,9 @@ namespace EchoBot.Bot
             _logger.LogInformation($"disposed {this.audioMediaBuffers.Count} audioMediaBUffers.");
 
             this.audioMediaBuffers.Clear();
+
+            // Set WebSocket as disconnected
+            _isWebSocketConnected = false;
 
             // Dispose WebSocket client
             _webSocketClient?.Dispose();
@@ -511,6 +530,21 @@ namespace EchoBot.Bot
         {
             _isWebSocketConnected = false;
             _logger.LogWarning("WebSocket connection closed - audio/video streaming will be paused");
+
+            // Clear video states and unsubscribe from video socket
+            try
+            {
+                _participantVideoState.Clear();
+                if (videoSocket != null)
+                {
+                    videoSocket.Unsubscribe();
+                    Console.WriteLine($"[BotMediaStream] Unsubscribed from video socket due to WebSocket disconnection");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error cleaning up video socket: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -518,6 +552,13 @@ namespace EchoBot.Bot
         /// </summary>
         public void Subscribe(MediaType mediaType, uint msi, VideoResolution resolution)
         {
+            // Don't subscribe if WebSocket is not connected
+            if (!_isWebSocketConnected)
+            {
+                Console.WriteLine($"[BotMediaStream] WebSocket not connected, skipping video subscription");
+                return;
+            }
+
             try
             {
                 if (videoSocket != null)

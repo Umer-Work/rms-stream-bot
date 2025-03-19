@@ -345,8 +345,82 @@ namespace EchoBot.Bot
         {
             try
             {
-                // Always check for video stream changes for the candidate participant
-                if (sender.Id == subscribedParticipantId || !hasSubscribedToCandidate)
+                var participantDetails = sender.Resource?.Info?.Identity?.User;
+                bool isCandidate = false;
+
+                // If this is already our subscribed candidate, treat them as candidate
+                if (sender.Id == subscribedParticipantId)
+                {
+                    isCandidate = true;
+                }
+                // Check if we need to determine if this is a candidate
+                else if (!hasSubscribedToCandidate)
+                {
+                    // First check if we already have user details
+                    if (BotMediaStream.userDetailsMap?.ContainsKey(participantDetails?.Id) == true)
+                    {
+                        // We have user details, not a candidate
+                        isCandidate = false;
+                    }
+                    else if (participantDetails != null)
+                    {
+                        // Try to get user details from Graph API
+                        try
+                        {
+                            var credentials = new ClientSecretCredential(
+                                _settings.AadTenantId,
+                                _settings.AadAppId,
+                                _settings.AadAppSecret
+                            );
+
+                            var graphServiceClient = new GraphServiceClient(credentials);
+                            // Use Wait() to make this synchronous - we need to know if this is a candidate before proceeding
+                            var user = Task.Run(async () => await graphServiceClient.Users[participantDetails.Id].GetAsync()).Result;
+                            
+                            if (user != null)
+                            {
+                                Console.WriteLine($"[CallHandler] Graph API User Details in OnUpdated: ID={user.Id}, Name={user.DisplayName}, Email={user.Mail ?? "No email"}");
+                                
+                                // Store user details in the BotMediaStream's dictionary
+                                this.BotMediaStream.userDetailsMap ??= new Dictionary<string, BotMediaStream.UserDetails>();
+                                this.BotMediaStream.userDetailsMap[participantDetails.Id] = new BotMediaStream.UserDetails
+                                {
+                                    Id = user.Id,
+                                    DisplayName = user.DisplayName,
+                                    Email = user.Mail ?? "No email"
+                                };
+
+                                // Since we got valid user details, this is not a candidate
+                                isCandidate = false;
+                            }
+                            else
+                            {
+                                // If we can't get user details, they might be external/guest
+                                isCandidate = true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[CallHandler] Error fetching user details from Graph in OnUpdated: {ex.Message}");
+                            // If we can't fetch user details, they might be external/guest
+                            isCandidate = true;
+                        }
+                    }
+                    else
+                    {
+                        // No user details available, might be external/guest
+                        isCandidate = true;
+                    }
+
+                    // If this is a candidate and we haven't subscribed yet, mark them
+                    if (isCandidate && !hasSubscribedToCandidate)
+                    {
+                        subscribedParticipantId = sender.Id;
+                    }
+                }
+
+                // Check for video stream changes if this is our candidate
+                if (isCandidate)
                 {
                     var oldMediaStreams = args.OldResource?.MediaStreams;
                     var newMediaStreams = args.NewResource?.MediaStreams;
@@ -360,14 +434,14 @@ namespace EchoBot.Bot
                         (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
 
                     // Log the change in video state
-                    Console.WriteLine($"[CallHandler] Video state change for participant {sender.Id}:");
+                    Console.WriteLine($"[CallHandler] Video state change for candidate {sender.Id}:");
                     Console.WriteLine($"  Old video stream: {(oldVideoStream != null ? oldVideoStream.SourceId : "none")}");
                     Console.WriteLine($"  New video stream: {(newVideoStream != null ? newVideoStream.SourceId : "none")}");
 
                     // If video stream becomes available or changes
                     if (newVideoStream != null && (oldVideoStream == null || oldVideoStream.SourceId != newVideoStream.SourceId))
                     {
-                        Console.WriteLine($"[CallHandler] Detected new video stream, attempting to subscribe");
+                        Console.WriteLine($"[CallHandler] Detected new video stream for candidate, attempting to subscribe");
                         SubscribeToParticipantVideo(sender);
                     }
                 }
