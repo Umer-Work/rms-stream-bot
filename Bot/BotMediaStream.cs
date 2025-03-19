@@ -442,43 +442,26 @@ namespace EchoBot.Bot
                             userDetailsMap.TryGetValue(info.UserId, out userDetails);
                         }
 
-                        // Calculate minutes since meeting start
-                        long? timeSinceMeetingStart = null;
-                        if (_meetingStartTime.HasValue)
-                        {
-                            // Convert meeting start time from milliseconds to seconds
-                            var meetingStartTimeSec = _meetingStartTime.Value / 1000;
-                            
-                            // Calculate seconds since meeting start
-                            var secondsSinceMeetingStart = speakStartTimeSec - meetingStartTimeSec;
-                            
-                            // Convert to minutes
-                            timeSinceMeetingStart = secondsSinceMeetingStart / 60;
-                        }
-
-                        var role = string.IsNullOrEmpty(userDetails?.Email) ? "Candidate" : "Panelist";
-                        var email = userDetails?.Email ?? _candidateEmail ?? "";
+                        var email = info.Email ?? userDetails?.Email ?? _candidateEmail ?? "";
                         var displayName = info.DisplayName ?? "Unknown";
+                        var role = email == _candidateEmail ? "Candidate" : "Panelist";
 
-                        // Send both the audio data and timing information
                         await _webSocketClient.SendAudioDataAsync(
                             combinedBuffer,
                             email,
                             displayName,
-                            speakStartTimeMs,  // Use milliseconds timestamp
-                            speakEndTimeMs,    // Use milliseconds timestamp
+                            speakStartTimeMs,
+                            speakEndTimeMs,
                             role
                         );
                     }
+
+                    // Clear the processed buffers to prevent duplication
+                    _speakerBuffers[speakerId].Clear();
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing clubbed audio data");
-                }
-                finally
-                {
-                    // Clear the buffers after sending
-                    _speakerBuffers[speakerId].Clear();
+                    _logger.LogError(ex, "Error processing and sending buffered audio");
                 }
             }
         }
