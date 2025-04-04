@@ -24,6 +24,8 @@ using System.Runtime.InteropServices;
 using System.IO;
 using System.Text.Json;
 using System.Collections.Generic;
+using Newtonsoft.Json;
+using System.Collections;
 
 namespace EchoBot.Bot
 {
@@ -42,6 +44,26 @@ namespace EchoBot.Bot
         private AppSettings _settings;
 
         /// <summary>
+        /// The video stream interval in seconds
+        /// </summary>
+        private const int VIDEO_STREAM_INTERVAL = 5;
+
+        /// <summary>
+        /// Dictionary to track last video send time for each participant
+        /// </summary>
+        private readonly Dictionary<string, DateTime> _lastVideoSendTime = new Dictionary<string, DateTime>();
+
+        /// <summary>
+        /// Dictionary to track video stream state for participants
+        /// </summary>
+        private readonly Dictionary<string, bool> _participantVideoState = new Dictionary<string, bool>();
+
+        /// <summary>
+        /// Dictionary to track MSI history for participants
+        /// </summary>
+        private readonly Dictionary<string, HashSet<uint>> _participantMsiHistory = new Dictionary<string, HashSet<uint>>();
+
+        /// <summary>
         /// The participants
         /// </summary>
         internal List<IParticipant> participants;
@@ -52,6 +74,11 @@ namespace EchoBot.Bot
         internal Dictionary<string, UserDetails> userDetailsMap;
 
         /// <summary>
+        /// Gets the WebSocket client instance
+        /// </summary>
+        public WebSocketClient WebSocketClient => _webSocketClient;
+
+        /// <summary>
         /// The audio socket
         /// </summary>
         private readonly IAudioSocket _audioSocket;
@@ -59,10 +86,18 @@ namespace EchoBot.Bot
         /// The call instance
         /// </summary>
         private readonly ICall _call;
+
+        private long? _meetingStartTime;
+        private long? _meetingEndTime;
+        private string? _candidateEmail;
+
+        // Track which participant is the candidate
+        private string? _candidateUserId;
+
         /// <summary>
         /// The media stream
         /// </summary>
-        private readonly List<IVideoSocket> multiViewVideoSockets;
+        private readonly IVideoSocket videoSocket;
         private readonly ILogger _logger;
         private AudioVideoFramePlayer audioVideoFramePlayer;
         private readonly TaskCompletionSource<bool> audioSendStatusActive;
@@ -71,28 +106,24 @@ namespace EchoBot.Bot
         private List<AudioMediaBuffer> audioMediaBuffers = new List<AudioMediaBuffer>();
         private int shutdown;
         private readonly SpeechService _languageService;
-
+        private readonly WebSocketClient _webSocketClient;
         private readonly object _fileLock = new object();
+        private bool _isWebSocketConnected = false;
 
-        private async Task AppendToAudioTodayFile(string jsonData)
+        // Dictionary to store buffers for each speaker
+        private Dictionary<string, List<(byte[] buffer, long timestamp)>> _speakerBuffers = new Dictionary<string, List<(byte[] buffer, long timestamp)>>();
+        private string _currentSpeakerId = null;
+        private DateTime _lastBufferTime = DateTime.MinValue;
+        private const int SILENCE_THRESHOLD_MS = 500; // 500ms silence threshold
+
+        private class ParticipantInfo
         {
-            var filePath = Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
-            lock (_fileLock)
-            {
-                // Ensure each JSON object is on a new line
-                File.AppendAllText(filePath, jsonData + Environment.NewLine);
-            }
+            public string UserId { get; set; }
+            public string DisplayName { get; set; }
+            public string Email { get; set; }
         }
 
-        private async Task AppendToVideoTodayFile(string jsonData)
-        {
-            var filePath = Path.Combine("rawData", $"video_data_{DateTime.Now:yyyy-MM-dd}.txt");
-            lock (_fileLock)
-            {
-                // Ensure each JSON object is on a new line
-                File.AppendAllText(filePath, jsonData + Environment.NewLine);
-            }
-        }
+        private Dictionary<string, ParticipantInfo> _participantInfo = new Dictionary<string, ParticipantInfo>();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="BotMediaStream" /> class.
@@ -103,6 +134,10 @@ namespace EchoBot.Bot
         /// <param name="logger">The logger.</param>
         /// <param name="settings">Azure settings</param>
         /// <param name="call">The call instance</param>
+        /// <param name="webSocketClient">WebSocket client instance</param>
+        /// <param name="meetingStartTime">Optional meeting start time</param>
+        /// <param name="meetingEndTime">Optional meeting end time</param>
+        /// <param name="candidateEmail">Optional candidate email</param>
         /// <exception cref="InvalidOperationException">A mediaSession needs to have at least an audioSocket</exception>
         public BotMediaStream(
             ILocalMediaSession mediaSession,
@@ -110,7 +145,11 @@ namespace EchoBot.Bot
             IGraphLogger graphLogger,
             ILogger logger,
             AppSettings settings,
-            ICall call
+            ICall call,
+            WebSocketClient webSocketClient,
+            long? meetingStartTime = null,
+            long? meetingEndTime = null,
+            string? candidateEmail = null
         )
             : base(graphLogger)
         {
@@ -118,10 +157,19 @@ namespace EchoBot.Bot
             ArgumentVerifier.ThrowOnNullArgument(logger, nameof(logger));
             ArgumentVerifier.ThrowOnNullArgument(settings, nameof(settings));
             ArgumentVerifier.ThrowOnNullArgument(call, nameof(call));
+            ArgumentVerifier.ThrowOnNullArgument(webSocketClient, nameof(webSocketClient));
 
             _settings = settings;
             _logger = logger;
             _call = call;
+            _meetingStartTime = meetingStartTime;
+            _meetingEndTime = meetingEndTime;
+            _candidateEmail = candidateEmail;
+            _webSocketClient = webSocketClient;
+            _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
+            _isWebSocketConnected = true;  // Set initial connection status
+
+            Console.WriteLine($"[BotMediaStream] Meeting Start Time: {meetingStartTime}, Meeting End Time: {meetingEndTime}, Candidate Email: {candidateEmail}");
 
             // Initialize participants list
             this.participants = new List<IParticipant>();
@@ -137,26 +185,20 @@ namespace EchoBot.Bot
             var ignoreTask = this.StartAudioVideoFramePlayerAsync().ForgetAndLogExceptionAsync(this.GraphLogger, "Failed to start the player");
 
             this._audioSocket.AudioSendStatusChanged += OnAudioSendStatusChanged;            
-
             this._audioSocket.AudioMediaReceived += this.OnAudioMediaReceived;
 
-            // Console.WriteLine($"[BotMediaStream] Media sockets initialized for call {callId}");
+            // if (_settings.UseSpeechService)
+            // {
+            //     _languageService = new SpeechService(_settings, _logger);
+            //     _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
+            // }
 
-            if (_settings.UseSpeechService)
+            // Get single video socket
+            this.videoSocket = mediaSession.VideoSockets?.FirstOrDefault();
+            if (this.videoSocket != null)
             {
-                _languageService = new SpeechService(_settings, _logger);
-                _languageService.SendMediaBuffer += this.OnSendMediaBuffer;
-            }
-
-
-            this.multiViewVideoSockets = mediaSession.VideoSockets?.ToList();
-            foreach (var videoSocket in this.multiViewVideoSockets)
-            {
-                Console.WriteLine($"Video socket initialized with ID: {videoSocket.SocketId}");
+                Console.WriteLine($"[BotMediaStream] Initialized single video socket with ID: {videoSocket.SocketId}");
                 videoSocket.VideoMediaReceived += this.OnVideoMediaReceived;
-                // videoSocket.VideoReceiveStatusChanged += (s, e) => {
-                //     Console.WriteLine($"Video receive status changed for socket {e.SocketId}: {e.MediaReceiveStatus}");
-                // };
             }
         }
 
@@ -180,7 +222,24 @@ namespace EchoBot.Bot
                 return;
             }
 
+            // First unsubscribe from video socket to stop video streaming
+            try
+            {
+                if (videoSocket != null)
+                {
+                    videoSocket.Unsubscribe();
+                    Console.WriteLine($"[BotMediaStream] Unsubscribed from video socket during shutdown");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error unsubscribing from video socket during shutdown: {ex.Message}");
+            }
+
             await this.startVideoPlayerCompleted.Task.ConfigureAwait(false);
+
+            // Clear video states
+            _participantVideoState.Clear();
 
             // unsubscribe
             if (this._audioSocket != null)
@@ -194,8 +253,7 @@ namespace EchoBot.Bot
                 await this.audioVideoFramePlayer.ShutdownAsync().ConfigureAwait(false);
             }
 
-            // make sure all the audio and video buffers are disposed, it can happen that,
-            // the buffers were not enqueued but the call was disposed if the caller hangs up quickly
+            // make sure all the audio and video buffers are disposed
             foreach (var audioMediaBuffer in this.audioMediaBuffers)
             {
                 audioMediaBuffer.Dispose();
@@ -204,6 +262,12 @@ namespace EchoBot.Bot
             _logger.LogInformation($"disposed {this.audioMediaBuffers.Count} audioMediaBUffers.");
 
             this.audioMediaBuffers.Clear();
+
+            // Set WebSocket as disconnected
+            _isWebSocketConnected = false;
+
+            // Dispose WebSocket client
+            _webSocketClient?.Dispose();
         }
 
         /// <summary>
@@ -257,8 +321,10 @@ namespace EchoBot.Bot
         /// <param name="e">The audio media received arguments.</param>
         private async void OnAudioMediaReceived(object sender, AudioMediaReceivedEventArgs e)
         {
-            // Console.WriteLine("Received Audio : " + e.Buffer.UnmixedAudioBuffers);
-            // Console.WriteLine("Received Audio : " + e.Buffer.ActiveSpeakers);
+
+            // Console.WriteLine("Audio Media Received: " + JsonConvert.SerializeObject(e, Formatting.Indented));
+
+            if (!_isWebSocketConnected) return;
 
             if (e.Buffer.UnmixedAudioBuffers != null)
             {
@@ -267,81 +333,87 @@ namespace EchoBot.Bot
                     var length = buffer.Length;
                     var data = new byte[length];
                     Marshal.Copy(buffer.Data, data, 0, (int)length);
-                    // Console.WriteLine("buffer.ActiveSpeakerId: " + buffer.ActiveSpeakerId);
                     
-                    // Get participant information using the call instance
-                    var participant = _call.Participants.SingleOrDefault(x => 
-                        x.Resource.IsInLobby == false && 
-                        x.Resource.MediaStreams.Any(y => y.SourceId == buffer.ActiveSpeakerId.ToString()));
+                    var speakerId = buffer.ActiveSpeakerId.ToString();
+                    var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     
-                    if (participant != null)
+                    if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
                     {
-                        var identitySet = participant.Resource?.Info?.Identity;
-                        var identity = identitySet?.User;
-                        Console.WriteLine($"identity: {identity}");
-                        Console.WriteLine($"Active Speaker Identity: {identity?.Id}, DisplayName: {identity?.DisplayName}");
+                        await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                    }
+
+                    // Initialize buffer list for new speaker if needed
+                    if (!_speakerBuffers.ContainsKey(speakerId))
+                    {
+                        _speakerBuffers[speakerId] = new List<(byte[] buffer, long timestamp)>();
+                    }
+
+                    // Add current buffer and timestamp to speaker's buffer list
+                    _speakerBuffers[speakerId].Add((data, currentTimestamp));
+                    _currentSpeakerId = speakerId;
+                    _lastBufferTime = DateTime.Now;
+
+                    // Store the participant info for when we need to send
+                    if (!_participantInfo.ContainsKey(speakerId))
+                    {
+                        var participant = _call.Participants.SingleOrDefault(x => 
+                            x.Resource.IsInLobby == false && 
+                            x.Resource.MediaStreams.Any(y => y.SourceId == speakerId));
                         
-                        // Get stored user details including email
-                        UserDetails userDetails = null;
-                        if (identity?.Id != null && userDetailsMap != null)
+                        if (participant != null)
                         {
-                            userDetailsMap.TryGetValue(identity.Id, out userDetails);
-                        }
-                        
-                        // Save data to file
-                        // try 
-                        // {
-                        //     var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-                        //     var info = new
-                        //     {
-                        //         Timestamp = timestamp,
-                        //         ActiveSpeakerId = buffer.ActiveSpeakerId,
-                        //         UserId = identity?.Id,
-                        //         DisplayName = identity?.DisplayName,
-                        //         Email = userDetails?.Email,
-                        //         AudioLength = length,
-                        //         AudioData = data  // Store raw audio data instead of Base64
-                        //     };
+                            var identitySet = participant.Resource?.Info?.Identity;
+                            var identity = identitySet?.User;
                             
-                        //     var jsonData = System.Text.Json.JsonSerializer.Serialize(info);
-                        //     await AppendToAudioTodayFile(jsonData);
-                        // }
-                        // catch (Exception ex)
-                        // {
-                        //     Console.WriteLine($"Error saving data to file: {ex.Message}");
-                        //     _logger.LogError(ex, "Error saving audio data to file");
-                        // }
+                            UserDetails userDetails = null;
+                            if (identity?.Id != null && userDetailsMap != null)
+                            {
+                                userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                            }
+
+                            _participantInfo[speakerId] = new ParticipantInfo 
+                            {
+                                UserId = identity?.Id,
+                                DisplayName = identity?.DisplayName,
+                                Email = userDetails?.Email
+                            };
+                        }
                     }
                 }
             }
 
             try
             {
-                // Console.WriteLine($"Received Audio: [AudioMediaReceivedEventArgs(Data=<{e.Buffer.Data.ToString()}>, Length={e.Buffer.Length}, Timestamp={e.Buffer.Timestamp})]");
                 if (!startVideoPlayerCompleted.Task.IsCompleted) { return; }
 
-                if (_languageService != null)
+                // Check for silence timeout and process any pending buffers
+                if (_currentSpeakerId != null)
                 {
-                    // send audio buffer to language service for processing
-                    // the particpant talking will hear the bot repeat what they said
-                    await _languageService.AppendAudioBuffer(e.Buffer);
-                    e.Buffer.Dispose();
-                }
-                else
-                {
-                    // send audio buffer back on the audio socket
-                    // the particpant talking will hear themselves
-                    var length = e.Buffer.Length;
-                    if (length > 0)
+                    var timeSinceLastBuffer = DateTime.Now - _lastBufferTime;
+                    if (timeSinceLastBuffer.TotalMilliseconds > SILENCE_THRESHOLD_MS)
                     {
-                        var buffer = new byte[length];
-                        Marshal.Copy(e.Buffer.Data, buffer, 0, (int)length);
-
-                        var currentTick = DateTime.Now.Ticks;
-                        this.audioMediaBuffers = Util.Utilities.CreateAudioMediaBuffers(buffer, currentTick, _logger);
-                        await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>());
+                        await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                        _currentSpeakerId = null;
                     }
                 }
+
+                // if (_languageService != null)
+                // {
+                //     await _languageService.AppendAudioBuffer(e.Buffer);
+                // }
+                // else
+                // {
+                //     var length = e.Buffer.Length;
+                //     if (length > 0)
+                //     {
+                //         var buffer = new byte[length];
+                //         Marshal.Copy(e.Buffer.Data, buffer, 0, (int)length);
+
+                //         var currentTick = DateTime.Now.Ticks;
+                //         this.audioMediaBuffers = Util.Utilities.CreateAudioMediaBuffers(buffer, currentTick, _logger);
+                //         await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>());
+                //     }
+                // }
             }
             catch (Exception ex)
             {
@@ -354,94 +426,175 @@ namespace EchoBot.Bot
             }
         }
 
-        /// <summary>
-        /// Receive video from subscribed participant.
-        /// </summary>
-        /// <param name="sender">The sender.</param>
-        /// <param name="e">The video media received arguments.</param>
-        private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
+        private async Task ProcessAndSendBufferedAudio(string speakerId)
         {
-            // Console.WriteLine($"[VideoMediaReceivedEventArgs(Data=<{e.Buffer.Data.ToString()}>, Length={e.Buffer.Length}, Timestamp={e.Buffer.Timestamp}, Width={e.Buffer.VideoFormat.Width}, Height={e.Buffer.VideoFormat.Height}, ColorFormat={e.Buffer.VideoFormat.VideoColorFormat}, FrameRate={e.Buffer.VideoFormat.FrameRate} MediaSourceId={e.Buffer.MediaSourceId})]");
-            // e.Buffer.Dispose();
-            // try 
-            // {
-            //     // Get participant information using MediaSourceId
-            //     var participant = _call.Participants.SingleOrDefault(x => 
-            //         x.Resource.IsInLobby == false && 
-            //         x.Resource.MediaStreams.Any(y => y.SourceId == e.Buffer.MediaSourceId.ToString()));
+            if (_speakerBuffers.ContainsKey(speakerId) && _speakerBuffers[speakerId].Count > 0)
+            {
+                try
+                {
+                    var bufferList = _speakerBuffers[speakerId];
+                    // Get the start timestamp in milliseconds
+                    var speakStartTimeMs = bufferList.First().timestamp;
+                    var speakEndTimeMs = bufferList.Last().timestamp;
 
-            //     if (participant != null)
-            //     {
-            //         var identity = participant.Resource?.Info?.Identity?.User;
-                    
-            //         // Get stored user details including email
-            //         UserDetails userDetails = null;
-            //         if (identity?.Id != null && userDetailsMap != null)
-            //         {
-            //             userDetailsMap.TryGetValue(identity.Id, out userDetails);
-            //         }
+                    // Convert speak times from milliseconds to seconds
+                    var speakStartTimeSec = speakStartTimeMs / 1000;
+                    var speakEndTimeSec = speakEndTimeMs / 1000;
 
-            //         // Copy video data from IntPtr to byte array
-            //         var length = e.Buffer.Length;
-            //         var data = new byte[length];
-            //         Marshal.Copy(e.Buffer.Data, data, 0, (int)length);
+                    // Combine all buffers for this speaker
+                    var totalLength = bufferList.Sum(b => b.buffer.Length);
+                    var combinedBuffer = new byte[totalLength];
+                    var offset = 0;
 
-            //         var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
-            //         var info = new
-            //         {
-            //             Timestamp = timestamp,
-            //             MediaSourceId = e.Buffer.MediaSourceId,
-            //             UserId = identity?.Id,
-            //             DisplayName = identity?.DisplayName,
-            //             Email = userDetails?.Email,
-            //             VideoLength = length,
-            //             VideoData = data,
-            //             Width = e.Buffer.VideoFormat.Width,
-            //             Height = e.Buffer.VideoFormat.Height
-            //         };
+                    foreach (var (buffer, _) in bufferList)
+                    {
+                        Buffer.BlockCopy(buffer, 0, combinedBuffer, offset, buffer.Length);
+                        offset += buffer.Length;
+                    }
 
-            //         var jsonData = System.Text.Json.JsonSerializer.Serialize(info);
-            //         await AppendToVideoTodayFile(jsonData);
-            //     }
-            // }
-            // catch (Exception ex)
-            // {
-            //     Console.WriteLine($"Error saving video data: {ex.Message}");
-            //     _logger.LogError(ex, "Error saving video data");
-            // }
-            // finally
-            // {
-            //     e.Buffer.Dispose();
-            // }
+                    // Get participant info
+                    if (_participantInfo.TryGetValue(speakerId, out var info))
+                    {
+                        UserDetails userDetails = null;
+                        if (userDetailsMap != null && info.UserId != null)
+                        {
+                            userDetailsMap.TryGetValue(info.UserId, out userDetails);
+                        }
+
+                        var email = info.Email ?? userDetails?.Email ?? _candidateEmail ?? "";
+                        var displayName = info.DisplayName ?? "Unknown";
+                        var role = email == _candidateEmail ? "Candidate" : "Panelist";
+
+                        await _webSocketClient.SendAudioDataAsync(
+                            combinedBuffer,
+                            email,
+                            displayName,
+                            speakStartTimeMs,
+                            speakEndTimeMs,
+                            role
+                        );
+                    }
+
+                    // Clear the processed buffers to prevent duplication
+                    _speakerBuffers[speakerId].Clear();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing and sending buffered audio");
+                }
+            }
         }
 
-        private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)
+        private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
         {
-            this.audioMediaBuffers = e.AudioMediaBuffers;
-            var result = Task.Run(async () => await this.audioVideoFramePlayer.EnqueueBuffersAsync(this.audioMediaBuffers, new List<VideoMediaBuffer>())).GetAwaiter();
+            if (!_isWebSocketConnected) 
+            {
+                Console.WriteLine("[BotMediaStream] WebSocket not connected, skipping video frame");
+                return;
+            }
+
+            try 
+            {
+                // Track that we're receiving video for this MSI
+                string msiKey = e.Buffer.MediaSourceId.ToString();
+                _participantVideoState[msiKey] = true;
+
+                byte[] buffer = new byte[e.Buffer.Length];
+                Marshal.Copy(e.Buffer.Data, buffer, 0, (int)e.Buffer.Length);
+                
+                // Send to WebSocket server
+                await _webSocketClient.SendVideoDataAsync(buffer, e.Buffer.VideoFormat, e.Buffer.OriginalVideoFormat);
+          
+                // Log video frame details
+                Console.WriteLine($"[BotMediaStream] Received video frame: MSI={e.Buffer.MediaSourceId}, Format={e.Buffer.VideoFormat}, Size={buffer.Length} bytes");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error processing video data: {ex.Message}");
+                Console.WriteLine($"[BotMediaStream] Video processing error: {ex.Message}");
+            }
+            finally
+            {
+                e.Buffer.Dispose();
+            }
+        }
+
+        // private void OnSendMediaBuffer(object? sender, Media.MediaStreamEventArgs e)
+        // {
+        //     // Skip enqueueing any audio buffers to prevent sending audio
+        //     // We don't store or enqueue the buffers, effectively preventing audio transmission
+        //     _logger.LogTrace("Skipping audio buffer enqueue to maintain muted state");
+        // }
+
+        private void WebSocketClient_ConnectionClosed(object sender, EventArgs e)
+        {
+            _isWebSocketConnected = false;
+            _logger.LogWarning("WebSocket connection closed - audio/video streaming will be paused");
+
+            // Clear video states and unsubscribe from video socket
+            try
+            {
+                _participantVideoState.Clear();
+                if (videoSocket != null)
+                {
+                    videoSocket.Unsubscribe();
+                    Console.WriteLine($"[BotMediaStream] Unsubscribed from video socket due to WebSocket disconnection");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error cleaning up video socket: {ex.Message}");
+            }
         }
 
         /// <summary>
         /// Subscribe to a participant's video
         /// </summary>
-        public void Subscribe(MediaType mediaType, uint msi, VideoResolution resolution, uint socketId)
+        public void Subscribe(MediaType mediaType, uint msi, VideoResolution resolution)
         {
+            // Don't subscribe if WebSocket is not connected
+            if (!_isWebSocketConnected)
+            {
+                Console.WriteLine($"[BotMediaStream] WebSocket not connected, skipping video subscription");
+                return;
+            }
+
             try
             {
-                var videoSocket = this.multiViewVideoSockets.FirstOrDefault(s => s.SocketId == socketId);
                 if (videoSocket != null)
                 {
-                    Console.WriteLine($"[BotMediaStream] Subscribing MSI {msi} to socket {socketId}");
-                    videoSocket.Subscribe(resolution, msi);  
+                    // Log subscription attempt
+                    Console.WriteLine($"[BotMediaStream] Attempting to subscribe to MSI {msi} on socket {videoSocket.SocketId}");
+
+                    // Unsubscribe from any existing subscription on this socket
+                    try
+                    {
+                        videoSocket.Unsubscribe();
+                        Console.WriteLine($"[BotMediaStream] Unsubscribed from previous stream on socket {videoSocket.SocketId}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[BotMediaStream] Error unsubscribing from previous stream: {ex.Message}");
+                    }
+
+                    // Subscribe to the new MSI
+                    videoSocket.Subscribe(resolution, msi);
+                    
+                    // Track that we're subscribed to this MSI
+                    string msiKey = msi.ToString();
+                    _participantVideoState[msiKey] = true;
+                    
+                    Console.WriteLine($"[BotMediaStream] Successfully subscribed to video stream MSI {msi}");
                 }
                 else
                 {
-                    Console.WriteLine($"[BotMediaStream] Socket {socketId} not found for subscription");
+                    Console.WriteLine($"[BotMediaStream] No video socket available for subscription");
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[BotMediaStream] Error in Subscribe: {ex.Message}");
+                Console.WriteLine($"[BotMediaStream] Stack trace: {ex.StackTrace}");
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 
 namespace EchoBot
 {
@@ -51,6 +51,17 @@ namespace EchoBot
         /// </summary>
         [Required]
         public int BotInternalPort { get; set; }
+
+        /// <summary>
+        /// Gets or sets the WebSocket server URL for streaming
+        /// </summary>
+        /// <value>The WebSocket server URL (e.g., "ws://localhost:3000")</value>
+        public string WebSocketServerUrl { get; set; }
+
+        /// <summary>
+        /// Gets or sets the JWT secret for WebSocket authentication
+        /// </summary>
+        public string WebSocketJwtSecret { get; set; }
 
         /// <summary>
         /// Gets or sets the call signaling port.
@@ -113,4 +124,3 @@ namespace EchoBot
         public string MediaDnsName { get; set; }
     }
 }
-

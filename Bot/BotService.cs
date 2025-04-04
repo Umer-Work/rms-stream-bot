@@ -23,7 +23,10 @@ using Microsoft.Graph.Communications.Common;
 using Microsoft.Graph.Communications.Common.Telemetry;
 using Microsoft.Graph.Communications.Resources;
 using Microsoft.Skype.Bots.Media;
+using System;
+using System.Threading.Tasks;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net;
 using EchoBot.Util;
 using Microsoft.Graph.Models;
@@ -61,6 +64,11 @@ namespace EchoBot.Bot
         private readonly IBotMediaLogger _mediaPlatformLogger;
 
         /// <summary>
+        /// Gets the WebSocket client instance
+        /// </summary>
+        private WebSocketClient _webSocketClient;
+
+        /// <summary>
         /// Gets the collection of call handlers.
         /// </summary>
         /// <value>The call handlers.</value>
@@ -72,6 +80,10 @@ namespace EchoBot.Bot
         /// <value>The client.</value>
         public ICommunicationsClient Client { get; private set; }
 
+        /// <summary>
+        /// Store meeting details for each call by thread ID
+        /// </summary>
+        private readonly Dictionary<string, (long? StartTime, long? EndTime, string? CandidateEmail)> _pendingCallDetails = new Dictionary<string, (long? StartTime, long? EndTime, string? CandidateEmail)>();
 
         /// <summary>
         /// Dispose of the call client
@@ -199,6 +211,50 @@ namespace EchoBot.Bot
 
             Console.WriteLine($"[BotService] Joining call with URL: {joinCallBody.JoinUrl}");
 
+            // Initialize WebSocket client if not already initialized
+            if (_webSocketClient == null)
+            {
+                if (string.IsNullOrEmpty(_settings.WebSocketServerUrl))
+                {
+                    _logger.LogError("WebSocket server URL is not configured");
+                    throw new InvalidOperationException("WebSocket server URL is not configured");
+                }
+
+                if (string.IsNullOrEmpty(_settings.WebSocketJwtSecret))
+                {
+                    _logger.LogError("WebSocket JWT secret is not configured");
+                    throw new InvalidOperationException("WebSocket JWT secret is not configured");
+                }
+
+                _webSocketClient = new WebSocketClient(
+                    _settings.WebSocketServerUrl, 
+                    _settings.WebSocketJwtSecret,
+                    joinCallBody.CompanyId,
+                    _logger,
+                    joinCallBody.MeetingId,
+                    joinCallBody.MeetingStartTime,
+                    joinCallBody.MeetingEndTime,
+                    joinCallBody.CandidateEmail,
+                    joinCallBody.MOATSQuestions
+                );
+                _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
+            }
+
+            // Connect to WebSocket server if not connected
+            if (!_webSocketClient.IsConnected)
+            {
+                try 
+                {
+                    await _webSocketClient.ConnectAsync();
+                    _logger.LogInformation("Successfully connected to WebSocket server");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"Failed to connect to WebSocket server: {ex.Message}");
+                    throw;
+                }
+            }
+
             var joinParams = new JoinMeetingParameters(chatInfo, meetingInfo, mediaSession)
             {
                 TenantId = tenantId,
@@ -217,42 +273,16 @@ namespace EchoBot.Bot
                 };
             }
 
-            // Console.WriteLine($"[BotService] Attempting to join call...");
             if (!this.CallHandlers.TryGetValue(joinParams.ChatInfo.ThreadId, out CallHandler? call))
             {
+                // Store the call details before creating the call
+                _pendingCallDetails[joinParams.ChatInfo.ThreadId] = (
+                    joinCallBody.MeetingStartTime,
+                    joinCallBody.MeetingEndTime,
+                    joinCallBody.CandidateEmail
+                );
+
                 var statefulCall = await this.Client.Calls().AddAsync(joinParams, scenarioId).ConfigureAwait(false);
-                // Console.WriteLine($"[BotService] Call creation complete: {statefulCall.Id}");
-
-                // Wait for call to be established
-                var timeout = TimeSpan.FromSeconds(30);
-                var startTime = DateTime.UtcNow;
-                // while (statefulCall.Resource.State != CallState.Established && DateTime.UtcNow - startTime < timeout)
-                // {
-                //     Console.WriteLine($"[BotService] Waiting for call to be established. Current state: {statefulCall.Resource.State}");
-                //     await Task.Delay(1000);
-                // }
-
-                // if (statefulCall.Resource.State == CallState.Established)
-                // {
-                //     // Console.WriteLine($"[BotService] Call established successfully");
-                    
-                //     // Try to get participants after call is established
-                //     var participants = statefulCall.Participants;
-                //     // Console.WriteLine($"[BotService] Participant count: {participants?.Count ?? 0}");
-                //     if (participants != null)
-                //     {
-                //         foreach (var participant in participants)
-                //         {
-                //             var displayName = participant.Resource?.Info?.Identity?.User?.DisplayName ?? "Unknown";
-                //             // Console.WriteLine($"[BotService] Found participant in roster: {displayName}");
-                //         }
-                //     }
-                // }
-                // else
-                // {
-                //     Console.WriteLine($"[BotService] Call did not establish within timeout. Current state: {statefulCall.Resource.State}");
-                // }
-
                 return statefulCall;
             }
 
@@ -269,17 +299,17 @@ namespace EchoBot.Bot
         {
             try
             {
-                var videoSocketSettings = new List<VideoSocketSettings>();
+                // var videoSocketSettings = new List<VideoSocketSettings>();
 
-                // create the receive only sockets settings for the multiview support
-                for (int i = 0; i < 3; i++)
-                {
-                    videoSocketSettings.Add(new VideoSocketSettings
-                    {
-                        StreamDirections = StreamDirection.Recvonly,
-                        ReceiveColorFormat = VideoColorFormat.NV12,
-                    });
-                }
+                // // create the receive only sockets settings for the multiview support
+                // for (int i = 0; i < 3; i++)
+                // {
+                //     videoSocketSettings.Add(new VideoSocketSettings
+                //     {
+                //         StreamDirections = StreamDirection.Recvonly,
+                //         ReceiveColorFormat = VideoColorFormat.NV12,
+                //     });
+                // }
 
                 // create media session object, this is needed to establish call connections
                 return this.Client.CreateMediaSession(
@@ -290,7 +320,17 @@ namespace EchoBot.Bot
                         SupportedAudioFormat = AudioFormat.Pcm16K,
                         ReceiveUnmixedMeetingAudio = true //get the extra buffers for the speakers
                     },
-                    videoSocketSettings,    
+                    new VideoSocketSettings
+                    {
+                        StreamDirections = StreamDirection.Recvonly,
+                        ReceiveColorFormat = VideoColorFormat.H264,
+                        SupportedSendVideoFormats = new List<VideoFormat>
+                        {
+                            VideoFormat.H264_320x180_15Fps, // Required minimum resolution
+                            VideoFormat.H264_1280x720_30Fps // Your desired resolution
+                        },
+                        MaxConcurrentSendStreams = 1
+                    },
                     mediaSessionId: mediaSessionId);
             }
             catch (Exception e)
@@ -298,6 +338,22 @@ namespace EchoBot.Bot
                 _logger.LogError(e.Message);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Handler for WebSocket connection closed event
+        /// </summary>
+        private void WebSocketClient_ConnectionClosed(object sender, EventArgs e)
+        {
+            _logger.LogWarning("WebSocket connection closed");
+        }
+
+        /// <summary>
+        /// Gets the WebSocket client instance
+        /// </summary>
+        public WebSocketClient GetWebSocketClient()
+        {
+            return _webSocketClient;
         }
 
         /// <summary>
@@ -360,24 +416,34 @@ namespace EchoBot.Bot
         {
             foreach (var call in args.AddedResources)
             {
-                // Console.WriteLine($"[BotService] Creating CallHandler for call {call.Id}");
-                // Console.WriteLine($"[BotService] Initial participant count: {call.Participants.Count}");
-                
-                var callHandler = new CallHandler(call, _settings, _logger);
                 var threadId = call.Resource.ChatInfo.ThreadId;
-                this.CallHandlers[threadId] = callHandler;
+                
+                // Try to get the pending call details
+                var (startTime, endTime, candidateEmail) = _pendingCallDetails.TryGetValue(threadId, out var details) 
+                    ? details 
+                    : (null, null, null);
+
+                // Remove from pending details since we're handling it now
+                _pendingCallDetails.Remove(threadId);
+
+                // Add the call to the list of calls
+                this.CallHandlers[threadId] = new CallHandler(
+                    call,
+                    _settings,
+                    _logger,
+                    _webSocketClient,
+                    startTime,
+                    endTime,
+                    candidateEmail
+                );
             }
 
             foreach (var call in args.RemovedResources)
             {
                 var threadId = call.Resource.ChatInfo.ThreadId;
-                if (this.CallHandlers.TryRemove(threadId, out CallHandler? handler))
+                if (this.CallHandlers.TryRemove(threadId, out CallHandler handler))
                 {
-                    Console.WriteLine($"[BotService] Removing CallHandler for call {call.Id}");
-                    Task.Run(async () => {
-                        await handler.BotMediaStream.ShutdownAsync();
-                        handler.Dispose();
-                    });
+                    handler.Dispose();
                 }
             }
         }

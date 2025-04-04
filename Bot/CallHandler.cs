@@ -11,6 +11,7 @@ using System.Timers;
 using System.Collections.Generic;
 using Microsoft.Skype.Bots.Media;
 using System.Net.Http.Headers;
+using Newtonsoft.Json;
 
 namespace EchoBot.Bot
 {
@@ -38,11 +39,15 @@ namespace EchoBot.Bot
         private readonly Dictionary<uint, uint> msiToSocketIdMapping = new Dictionary<uint, uint>();
 
         private readonly object subscriptionLock = new object();
-
-        private readonly IGraphLogger _logger;
-        private readonly IAudioSocket _audioSocket;
-        private readonly IVideoSocket _videoSocket;
+        private bool hasSubscribedToCandidate = false;
+        private readonly ILogger _logger;
         private readonly AppSettings _settings;
+
+        private long? _meetingStartTime;
+        private long? _meetingEndTime;
+        private string? _candidateEmail;
+
+        private string? subscribedParticipantId = null;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="CallHandler" /> class.
@@ -50,16 +55,27 @@ namespace EchoBot.Bot
         /// <param name="statefulCall">The stateful call.</param>
         /// <param name="settings">The settings.</param>
         /// <param name="logger"></param>
+        /// <param name="webSocketClient">WebSocket client instance</param>
+        /// <param name="meetingStartTime">Optional meeting start time</param>
+        /// <param name="meetingEndTime">Optional meeting end time</param>
+        /// <param name="candidateEmail">Optional candidate email</param>
         public CallHandler(
             ICall statefulCall,
             AppSettings settings,
-            ILogger logger
+            ILogger logger,
+            WebSocketClient webSocketClient,
+            long? meetingStartTime = null,
+            long? meetingEndTime = null,
+            string? candidateEmail = null
         )
             : base(TimeSpan.FromMinutes(10), statefulCall?.GraphLogger)
         {
             // Console.WriteLine($"[CallHandler] Initializing for call {statefulCall.Id}");
             this.Call = statefulCall;
             this._settings = settings;
+            this._meetingStartTime = meetingStartTime;
+            this._meetingEndTime = meetingEndTime;
+            this._candidateEmail = candidateEmail;
             
             // Subscribe to call updates first
             this.Call.OnUpdated += this.CallOnUpdated;
@@ -81,8 +97,18 @@ namespace EchoBot.Bot
             }
 
             // Create BotMediaStream before subscribing to participants
-            this.BotMediaStream = new BotMediaStream(this.Call.GetLocalMediaSession(), this.Call.Id, this.GraphLogger, logger, settings, this.Call);
- 
+            this.BotMediaStream = new BotMediaStream(
+                this.Call.GetLocalMediaSession(), 
+                this.Call.Id, 
+                this.GraphLogger, 
+                logger, 
+                settings, 
+                this.Call, 
+                webSocketClient,
+                this._meetingStartTime, 
+                this._meetingEndTime, 
+                this._candidateEmail
+            );
         }
 
         /// <inheritdoc/>
@@ -108,64 +134,50 @@ namespace EchoBot.Bot
         /// <param name="e">The event args containing call changes.</param>
         private async void CallOnUpdated(ICall sender, ResourceEventArgs<Call> e)
         {
-            // Console.WriteLine($"[CallHandler] Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
             GraphLogger.Info($"Call status updated to {e.NewResource.State} - {e.NewResource.ResultInfo?.Message}");
 
-            // if (e.OldResource.State != e.NewResource.State && e.NewResource.State == CallState.Established)
-            // {
-            //     // Console.WriteLine($"[CallHandler] Call established, getting updated roster");
+            // Check for participant media state changes
+            foreach (var participant in sender.Participants)
+            {
+                if (participant.Id == subscribedParticipantId)
+                {
+                    var videoStream = participant.Resource.MediaStreams?.FirstOrDefault(x => 
+                        x.MediaType == Modality.Video && 
+                        (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
+
+                    if (videoStream != null)
+                    {
+                        // Re-subscribe if this is our candidate and they have video available
+                        SubscribeToParticipantVideo(participant);
+                    }
+                }
+            }
+
+            // Handle call establishment
+            if (e.OldResource.State != CallState.Established && e.NewResource.State == CallState.Established)
+            {
+                _meetingStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                // No need to send meeting_started event as we already sent meeting_details
+            }
+
+            // Handle call termination
+            if (e.NewResource.State == CallState.Terminated)
+            {
+                Console.WriteLine($"[CallHandler] Call terminated. Reason: {e.NewResource.ResultInfo?.Message}");
                 
-            //     try
-            //     {
-            //         // Wait briefly to ensure participants are fully loaded
-            //         await Task.Delay(1000);
+                // Send meeting ended event with start and end times
+                if (_meetingStartTime.HasValue)
+                {
+                    var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_ended", _meetingStartTime.Value, endTime);
+                }
 
-            //         // Get participants from the call resource
-            //         var resourceParticipants = e.NewResource.Participants;
-            //         // Console.WriteLine($"[CallHandler] Resource participants count: {resourceParticipants?.Count ?? 0}");
-                    
-            //         if (resourceParticipants != null)
-            //         {
-            //             foreach (var participant in resourceParticipants)
-            //             {
-            //                 try 
-            //                 {
-            //                     // Get detailed participant info
-            //                     var participantInfo = await this.Call.Participants.GetAsync(participant.Id);
-            //                     if (participantInfo != null && CheckParticipantIsUsable(participantInfo))
-            //                     {
-            //                         Console.WriteLine($"[CallHandler] Adding resource participant: {participantInfo.Resource?.Info?.Identity?.User?.DisplayName ?? participantInfo.Id}");
-            //                         this.updateParticipants(new List<IParticipant> { participantInfo });
-            //                     }
-            //                 }
-            //                 catch (Exception participantEx)
-            //                 {
-            //                     Console.WriteLine($"[CallHandler] Error getting participant details for {participant.Id}: {participantEx.Message}");
-            //                 }
-            //             }
-            //         }
-
-            //         // Also check direct participants
-            //         var directParticipants = this.Call.Participants;
-            //         Console.WriteLine($"[CallHandler] Direct participants count: {directParticipants?.Count ?? 0}");
-            //         if (directParticipants != null)
-            //         {
-            //             foreach (var participant in directParticipants)
-            //             {
-            //                 if (CheckParticipantIsUsable(participant))
-            //                 {
-            //                     Console.WriteLine($"[CallHandler] Adding direct participant: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
-            //                     this.updateParticipants(new List<IParticipant> { participant });
-            //                 }
-            //             }
-            //         }
-            //     }
-            //     catch (Exception ex)
-            //     {
-            //         Console.WriteLine($"[CallHandler] Error getting participants after establish: {ex.Message}");
-            //         GraphLogger.Error(ex, "Error getting participants after establish");
-            //     }
-            // }
+                if (BotMediaStream != null)
+                {
+                    Console.WriteLine($"[CallHandler] Shutting down media stream");
+                    await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
+                }
+            }
 
             if ((e.OldResource.State == CallState.Established) && (e.NewResource.State == CallState.Terminated))
             {
@@ -221,28 +233,21 @@ namespace EchoBot.Bot
                 try
                 {
                     var json = string.Empty;
-
-                    // todo remove the cast with the new graph implementation,
-                    // for now we want the bot to only subscribe to "real" participants
                     var participantDetails = participant?.Resource?.Info?.Identity?.User;
                     var participantId = participant?.Id;
-                    
+
                     if (participantDetails != null)
                     {
-                        // Get user details from Graph API
+                        var isCandidate = false;
                         try 
                         {
-                            // Create credential using client credentials flow
                             var credentials = new ClientSecretCredential(
-                                _settings.AadTenantId,  // Your tenant ID
-                                _settings.AadAppId,     // Your client/application ID
-                                _settings.AadAppSecret  // Your client secret
+                                _settings.AadTenantId,
+                                _settings.AadAppId,
+                                _settings.AadAppSecret
                             );
 
-                            // Create GraphServiceClient with the credentials
                             var graphServiceClient = new GraphServiceClient(credentials);
-
-                            // Get user details
                             var user = await graphServiceClient.Users[participantDetails.Id].GetAsync();
                             if (user != null)
                             {
@@ -257,53 +262,48 @@ namespace EchoBot.Bot
                                     Email = user.Mail ?? "No email"
                                 };
                             }
+                            else
+                            {
+                                // If we can't get user details, they might be external/guest
+                                isCandidate = true;
+                            }
                         }
                         catch (Exception ex)
                         {
                             Console.WriteLine($"[CallHandler] Error fetching user details from Graph: {ex.Message}");
+                            // If we can't fetch user details, they might be external/guest
+                            isCandidate = true;
                         }
 
-                        // Continue with existing logic
-                        // Console.WriteLine($"[CallHandler] Adding participant with display name: {participantDetails.DisplayName}");
                         json = updateParticipant(this.BotMediaStream.participants, participant, added, participantDetails.DisplayName);
                         
-                        // Subscribe to participant's video when they are added
-                        if (added)
+                        if (added && isCandidate)
                         {
-                            try
-                            {
-                                Console.WriteLine($"[CallHandler] Subscribing to video for participant: {participantDetails.DisplayName}");
-                                SubscribeToParticipantVideo(participant);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[CallHandler] Error subscribing to video: {ex.Message}");
-                            }
+                            Console.WriteLine($"[CallHandler] Found candidate participant: {participantDetails.DisplayName}");
+                            subscribedParticipantId = participant.Id;
+                            SubscribeToParticipantVideo(participant);
                         }
                     }
                     else if (participant?.Resource?.Info?.Identity?.AdditionalData?.Count > 0)
                     {
                         if (CheckParticipantIsUsable(participant))
                         {
-                            // Console.WriteLine($"[CallHandler] Adding participant with ID: {participantId}");
                             json = updateParticipant(this.BotMediaStream.participants, participant, added);
+                            
+                            if (added)
+                            {
+                                Console.WriteLine($"[CallHandler] Found potential candidate participant without user details");
+                                subscribedParticipantId = participant.Id;
+                                SubscribeToParticipantVideo(participant);
+                            }
                         }
-                        else
-                        {
-                            // Console.WriteLine($"[CallHandler] Participant {participantId} not usable - skipping");
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[CallHandler] Participant {participantId} has no identity info - skipping");
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Console.WriteLine($"[CallHandler] Error processing participant: {ex.Message}");
+                    Console.WriteLine($"[CallHandler] Error processing participant: {ex.Message}");
                 }
             }
-            // Console.WriteLine($"[CallHandler] After update: BotMediaStream.participants.Count = {this.BotMediaStream.participants.Count}");
         }
 
         /// <summary>
@@ -313,65 +313,175 @@ namespace EchoBot.Bot
         /// <param name="args">Event args containing added and removed participants.</param>
         public void ParticipantsOnUpdated(IParticipantCollection sender, CollectionEventArgs<IParticipant> args)
         {
-            // Console.WriteLine($"[CallHandler] Participants updated - Added: {args.AddedResources.Count}, Removed: {args.RemovedResources.Count}");
-            // foreach (var participant in args.AddedResources)
-            // {
-            //     Console.WriteLine($"[CallHandler] Participant added: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
-            // }
+            // Handle added participants
+            foreach (var participant in args.AddedResources)
+            {
+                Console.WriteLine($"[CallHandler] Participant added: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
+                // Monitor participant's media streams
+                participant.OnUpdated += Participant_OnUpdated;
+            }
+
+            // Handle removed participants
+            foreach (var participant in args.RemovedResources)
+            {
+                Console.WriteLine($"[CallHandler] Participant removed: {participant.Resource?.Info?.Identity?.User?.DisplayName ?? participant.Id}");
+                participant.OnUpdated -= Participant_OnUpdated;
+                
+                if (participant.Id == subscribedParticipantId)
+                {
+                    hasSubscribedToCandidate = false;
+                    subscribedParticipantId = null;
+                }
+            }
+
             updateParticipants(args.AddedResources);
             updateParticipants(args.RemovedResources, false);
         }
 
         /// <summary>
-        /// Subscribe to participant's video stream
+        /// Handle participant updates (including media state changes)
         /// </summary>
-        private void SubscribeToParticipantVideo(IParticipant participant, bool forceSubscribe = false)
+        private void Participant_OnUpdated(IParticipant sender, ResourceEventArgs<Participant> args)
         {
             try
             {
-                // Filter for video-capable streams
+                var participantDetails = sender.Resource?.Info?.Identity?.User;
+                bool isCandidate = false;
+
+                // If this is already our subscribed candidate, treat them as candidate
+                if (sender.Id == subscribedParticipantId)
+                {
+                    isCandidate = true;
+                }
+                // Check if we need to determine if this is a candidate
+                else if (!hasSubscribedToCandidate)
+                {
+                    // First check if we already have user details
+                    if (BotMediaStream.userDetailsMap?.ContainsKey(participantDetails?.Id) == true)
+                    {
+                        // We have user details, not a candidate
+                        isCandidate = false;
+                    }
+                    else if (participantDetails != null)
+                    {
+                        // Try to get user details from Graph API
+                        try
+                        {
+                            var credentials = new ClientSecretCredential(
+                                _settings.AadTenantId,
+                                _settings.AadAppId,
+                                _settings.AadAppSecret
+                            );
+
+                            var graphServiceClient = new GraphServiceClient(credentials);
+                            // Use Wait() to make this synchronous - we need to know if this is a candidate before proceeding
+                            var user = Task.Run(async () => await graphServiceClient.Users[participantDetails.Id].GetAsync()).Result;
+                            
+                            if (user != null)
+                            {
+                                Console.WriteLine($"[CallHandler] Graph API User Details in OnUpdated: ID={user.Id}, Name={user.DisplayName}, Email={user.Mail ?? "No email"}");
+                                
+                                // Store user details in the BotMediaStream's dictionary
+                                this.BotMediaStream.userDetailsMap ??= new Dictionary<string, BotMediaStream.UserDetails>();
+                                this.BotMediaStream.userDetailsMap[participantDetails.Id] = new BotMediaStream.UserDetails
+                                {
+                                    Id = user.Id,
+                                    DisplayName = user.DisplayName,
+                                    Email = user.Mail ?? "No email"
+                                };
+
+                                // Since we got valid user details, this is not a candidate
+                                isCandidate = false;
+                            }
+                            else
+                            {
+                                // If we can't get user details, they might be external/guest
+                                isCandidate = true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[CallHandler] Error fetching user details from Graph in OnUpdated: {ex.Message}");
+                            // If we can't fetch user details, they might be external/guest
+                            isCandidate = true;
+                        }
+                    }
+                    else
+                    {
+                        // No user details available, might be external/guest
+                        isCandidate = true;
+                    }
+
+                    // If this is a candidate and we haven't subscribed yet, mark them
+                    if (isCandidate && !hasSubscribedToCandidate)
+                    {
+                        subscribedParticipantId = sender.Id;
+                    }
+                }
+
+                // Check for video stream changes if this is our candidate
+                if (isCandidate)
+                {
+                    var oldMediaStreams = args.OldResource?.MediaStreams;
+                    var newMediaStreams = args.NewResource?.MediaStreams;
+
+                    var oldVideoStream = oldMediaStreams?.FirstOrDefault(x =>
+                        x.MediaType == Modality.Video &&
+                        (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
+
+                    var newVideoStream = newMediaStreams?.FirstOrDefault(x =>
+                        x.MediaType == Modality.Video &&
+                        (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
+
+                    // Log the change in video state
+                    Console.WriteLine($"[CallHandler] Video state change for candidate {sender.Id}:");
+                    Console.WriteLine($"  Old video stream: {(oldVideoStream != null ? oldVideoStream.SourceId : "none")}");
+                    Console.WriteLine($"  New video stream: {(newVideoStream != null ? newVideoStream.SourceId : "none")}");
+
+                    // If video stream becomes available or changes
+                    if (newVideoStream != null && (oldVideoStream == null || oldVideoStream.SourceId != newVideoStream.SourceId))
+                    {
+                        Console.WriteLine($"[CallHandler] Detected new video stream for candidate, attempting to subscribe");
+                        SubscribeToParticipantVideo(sender);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CallHandler] Error in Participant_OnUpdated: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Subscribe to participant's video stream
+        /// </summary>
+        private void SubscribeToParticipantVideo(IParticipant participant)
+        {
+            try
+            {
                 var videoStream = participant.Resource.MediaStreams?.FirstOrDefault(x => 
                     x.MediaType == Modality.Video && 
                     (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
 
                 if (videoStream != null)
                 {
-                    uint socketId = uint.MaxValue;
                     var msi = uint.Parse(videoStream.SourceId);
-                    bool subscribeToVideo = false;
-
-                    lock (this.subscriptionLock)
-                    {
-                        // Check if we already have this MSI mapped
-                        if (!this.msiToSocketIdMapping.ContainsKey(msi))
-                        {
-                            // If we have available sockets, use one
-                            if (this.availableSocketIds.Count > 0)
-                            {
-                                socketId = this.availableSocketIds.First();
-                                this.availableSocketIds.Remove(socketId);
-                                subscribeToVideo = true;
-                                Console.WriteLine($"[CallHandler] Subscribing to video for participant {participant.Id} on socket {socketId}");
-                            }
-                            else if (forceSubscribe)
-                            {
-                                // If force subscribe, we could implement socket reuse here
-                                Console.WriteLine($"[CallHandler] No available sockets for participant {participant.Id} video");
-                            }
-                        }
-                    }
-
-                    if (subscribeToVideo && socketId != uint.MaxValue)
-                    {
-                        this.msiToSocketIdMapping[msi] = socketId;
-                        this.BotMediaStream.Subscribe(MediaType.Video, msi, VideoResolution.HD1080p, socketId);
-                        Console.WriteLine($"[CallHandler] Successfully subscribed to video for participant {participant.Id}");
-                    }
+                    Console.WriteLine($"[CallHandler] Subscribing to candidate video for participant {participant.Id} with MSI {msi}");
+                    this.BotMediaStream.Subscribe(MediaType.Video, msi, VideoResolution.HD1080p);
+                    subscribedParticipantId = participant.Id;
+                    hasSubscribedToCandidate = true;
+                }
+                else
+                {
+                    Console.WriteLine($"[CallHandler] No video stream available for participant {participant.Id}, will retry when stream becomes available");
+                    // Don't set hasSubscribedToCandidate to true until we actually get the stream
+                    hasSubscribedToCandidate = false;
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[CallHandler] Error subscribing to participant video: {ex.Message}");
+                hasSubscribedToCandidate = false;
             }
         }
 
@@ -380,31 +490,8 @@ namespace EchoBot.Bot
         /// </summary>
         private void UnsubscribeFromParticipantVideo(IParticipant participant)
         {
-            try
-            {
-                var videoStream = participant.Resource.MediaStreams?.FirstOrDefault(x => 
-                    x.MediaType == Modality.Video && 
-                    (x.Direction == MediaDirection.SendReceive || x.Direction == MediaDirection.SendOnly));
-
-                if (videoStream != null)
-                {
-                    var msi = uint.Parse(videoStream.SourceId);
-                    
-                    lock (this.subscriptionLock)
-                    {
-                        if (this.msiToSocketIdMapping.TryGetValue(msi, out uint socketId))
-                        {
-                            this.msiToSocketIdMapping.Remove(msi);
-                            this.availableSocketIds.Add(socketId);
-                            Console.WriteLine($"[CallHandler] Unsubscribed from video for participant {participant.Id}");
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[CallHandler] Error unsubscribing from participant video: {ex.Message}");
-            }
+            // Reset subscription flag when unsubscribing
+            hasSubscribedToCandidate = false;
         }
 
         /// <summary>
