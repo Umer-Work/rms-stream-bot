@@ -47,14 +47,20 @@ namespace EchoBot
             // Set up the bot web application
             var builder = WebApplication.CreateBuilder();
 
-            if (builder.Environment.IsDevelopment())
-            {
-                // load the .env file environment variables
-                builder.Configuration.AddDotNetEnv();
-            }
+            // if (builder.Environment.IsDevelopment())
+            // {
+            // load the .env file environment variables
+            builder.Configuration.AddDotNetEnv();
+            // }
 
             // Add Environment Variables
             builder.Configuration.AddEnvironmentVariables(prefix: "AppSettings__");
+
+            // TODO: Remove this after debugging
+            foreach (var envVar in Environment.GetEnvironmentVariables().Keys)
+            {
+                Console.WriteLine($"{envVar}: {Environment.GetEnvironmentVariable(envVar.ToString())}");
+            }
 
             // Add services to the container.
             builder.Services.AddControllers();
