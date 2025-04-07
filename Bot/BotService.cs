@@ -131,8 +131,10 @@ namespace EchoBot.Bot
                 _settings.AadAppSecret,
                 _graphLogger);
 
+            MediaPlatformSettings mediaPlatformSettings = null;
+            
             try {
-                var mediaPlatformSettings = new MediaPlatformSettings()
+                mediaPlatformSettings = new MediaPlatformSettings()
                 {
                     MediaPlatformInstanceSettings = new MediaPlatformInstanceSettings()
                     {
@@ -145,22 +147,23 @@ namespace EchoBot.Bot
                     ApplicationId = _settings.AadAppId,
                     MediaPlatformLogger = _mediaPlatformLogger
                 };
+                Console.WriteLine("Completed initialize Media Platform");
             } catch (Exception ex)
             {
                 Console.WriteLine("Failed to initialize Media Platform", ex);
             }
 
-            // var notificationUrl = new Uri($"https://{_settings.ServiceDnsName}:{_settings.BotInstanceExternalPort}/{HttpRouteConstants.CallSignalingRoutePrefix}/{HttpRouteConstants.OnNotificationRequestRoute}");
-            // _logger.LogInformation($"NotificationUrl: ${notificationUrl}");
+            var notificationUrl = new Uri($"https://{_settings.ServiceDnsName}:{_settings.BotInstanceExternalPort}/{HttpRouteConstants.CallSignalingRoutePrefix}/{HttpRouteConstants.OnNotificationRequestRoute}");
+            _logger.LogInformation($"NotificationUrl: ${notificationUrl}");
 
-            // builder.SetAuthenticationProvider(authProvider);
-            // builder.SetNotificationUrl(notificationUrl);
-            // builder.SetMediaPlatformSettings(mediaPlatformSettings);
-            // builder.SetServiceBaseUrl(new Uri(AppConstants.PlaceCallEndpointUrl));
+            builder.SetAuthenticationProvider(authProvider);
+            builder.SetNotificationUrl(notificationUrl);
+            builder.SetMediaPlatformSettings(mediaPlatformSettings);
+            builder.SetServiceBaseUrl(new Uri(AppConstants.PlaceCallEndpointUrl));
 
-            // this.Client = builder.Build();
-            // this.Client.Calls().OnIncoming += this.CallsOnIncoming;
-            // this.Client.Calls().OnUpdated += this.CallsOnUpdated;
+            this.Client = builder.Build();
+            this.Client.Calls().OnIncoming += this.CallsOnIncoming;
+            this.Client.Calls().OnUpdated += this.CallsOnUpdated;
         }
 
         /// <summary>
