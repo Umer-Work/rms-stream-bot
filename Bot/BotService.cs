@@ -131,27 +131,19 @@ namespace EchoBot.Bot
                 _settings.AadAppSecret,
                 _graphLogger);
 
-            MediaPlatformSettings mediaPlatformSettings = null;
-            
-            try {
-                mediaPlatformSettings = new MediaPlatformSettings()
-                {
-                    MediaPlatformInstanceSettings = new MediaPlatformInstanceSettings()
-                    {
-                        CertificateThumbprint = _settings.CertificateThumbprint,
-                        InstanceInternalPort = _settings.MediaInternalPort,
-                        InstancePublicIPAddress = IPAddress.Any,
-                        InstancePublicPort = _settings.MediaInstanceExternalPort,
-                        ServiceFqdn = _settings.MediaDnsName
-                    },
-                    ApplicationId = _settings.AadAppId,
-                    MediaPlatformLogger = _mediaPlatformLogger
-                };
-                Console.WriteLine("Completed initialize Media Platform");
-            } catch (Exception ex)
+            var mediaPlatformSettings = new MediaPlatformSettings()
             {
-                Console.WriteLine("Failed to initialize Media Platform", ex);
-            }
+                MediaPlatformInstanceSettings = new MediaPlatformInstanceSettings()
+                {
+                    CertificateThumbprint = _settings.CertificateThumbprint,
+                    InstanceInternalPort = _settings.MediaInternalPort,
+                    InstancePublicIPAddress = IPAddress.Any,
+                    InstancePublicPort = _settings.MediaInstanceExternalPort,
+                    ServiceFqdn = _settings.MediaDnsName
+                },
+                ApplicationId = _settings.AadAppId,
+                MediaPlatformLogger = _mediaPlatformLogger
+            };
 
             var notificationUrl = new Uri($"https://{_settings.ServiceDnsName}:{_settings.BotInstanceExternalPort}/{HttpRouteConstants.CallSignalingRoutePrefix}/{HttpRouteConstants.OnNotificationRequestRoute}");
             _logger.LogInformation($"NotificationUrl: ${notificationUrl}");
