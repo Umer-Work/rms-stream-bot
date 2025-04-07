@@ -4,7 +4,6 @@
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
 # Build directories
-bin/
 obj/
 
 # Visual Studio files
@@ -446,3 +445,4 @@ Source/CallingBotSample/wwwroot/temp/*
 obj/
 rawData/
 cache/
+.qodo
