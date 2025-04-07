@@ -131,31 +131,36 @@ namespace EchoBot.Bot
                 _settings.AadAppSecret,
                 _graphLogger);
 
-            var mediaPlatformSettings = new MediaPlatformSettings()
-            {
-                MediaPlatformInstanceSettings = new MediaPlatformInstanceSettings()
+            try {
+                var mediaPlatformSettings = new MediaPlatformSettings()
                 {
-                    CertificateThumbprint = _settings.CertificateThumbprint,
-                    InstanceInternalPort = _settings.MediaInternalPort,
-                    InstancePublicIPAddress = IPAddress.Any,
-                    InstancePublicPort = _settings.MediaInstanceExternalPort,
-                    ServiceFqdn = _settings.MediaDnsName
-                },
-                ApplicationId = _settings.AadAppId,
-                MediaPlatformLogger = _mediaPlatformLogger
-            };
+                    MediaPlatformInstanceSettings = new MediaPlatformInstanceSettings()
+                    {
+                        CertificateThumbprint = _settings.CertificateThumbprint,
+                        InstanceInternalPort = _settings.MediaInternalPort,
+                        InstancePublicIPAddress = IPAddress.Any,
+                        InstancePublicPort = _settings.MediaInstanceExternalPort,
+                        ServiceFqdn = _settings.MediaDnsName
+                    },
+                    ApplicationId = _settings.AadAppId,
+                    MediaPlatformLogger = _mediaPlatformLogger
+                };
+            } catch (Exception ex)
+            {
+                Console.WriteLine("Failed to initialize Media Platform", ex);
+            }
 
-            var notificationUrl = new Uri($"https://{_settings.ServiceDnsName}:{_settings.BotInstanceExternalPort}/{HttpRouteConstants.CallSignalingRoutePrefix}/{HttpRouteConstants.OnNotificationRequestRoute}");
-            _logger.LogInformation($"NotificationUrl: ${notificationUrl}");
+            // var notificationUrl = new Uri($"https://{_settings.ServiceDnsName}:{_settings.BotInstanceExternalPort}/{HttpRouteConstants.CallSignalingRoutePrefix}/{HttpRouteConstants.OnNotificationRequestRoute}");
+            // _logger.LogInformation($"NotificationUrl: ${notificationUrl}");
 
-            builder.SetAuthenticationProvider(authProvider);
-            builder.SetNotificationUrl(notificationUrl);
-            builder.SetMediaPlatformSettings(mediaPlatformSettings);
-            builder.SetServiceBaseUrl(new Uri(AppConstants.PlaceCallEndpointUrl));
+            // builder.SetAuthenticationProvider(authProvider);
+            // builder.SetNotificationUrl(notificationUrl);
+            // builder.SetMediaPlatformSettings(mediaPlatformSettings);
+            // builder.SetServiceBaseUrl(new Uri(AppConstants.PlaceCallEndpointUrl));
 
-            this.Client = builder.Build();
-            this.Client.Calls().OnIncoming += this.CallsOnIncoming;
-            this.Client.Calls().OnUpdated += this.CallsOnUpdated;
+            // this.Client = builder.Build();
+            // this.Client.Calls().OnIncoming += this.CallsOnIncoming;
+            // this.Client.Calls().OnUpdated += this.CallsOnUpdated;
         }
 
         /// <summary>
