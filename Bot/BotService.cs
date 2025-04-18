@@ -66,7 +66,7 @@ namespace EchoBot.Bot
         /// <summary>
         /// Gets the WebSocket client instance
         /// </summary>
-        private WebSocketClient _webSocketClient;
+        private WebSocketClient _webSocketClient = null!;
 
         /// <summary>
         /// Gets the collection of call handlers.
@@ -78,12 +78,12 @@ namespace EchoBot.Bot
         /// Gets the entry point for stateful bot.
         /// </summary>
         /// <value>The client.</value>
-        public ICommunicationsClient Client { get; private set; }
+        public ICommunicationsClient Client { get; private set; } = null!;
 
         /// <summary>
         /// Store meeting details for each call by thread ID
         /// </summary>
-        private readonly Dictionary<string, (long? StartTime, long? EndTime, string? CandidateEmail)> _pendingCallDetails = new Dictionary<string, (long? StartTime, long? EndTime, string? CandidateEmail)>();
+        private readonly Dictionary<string, (long StartTime, long EndTime, string CandidateEmail)> _pendingCallDetails = new Dictionary<string, (long StartTime, long EndTime, string CandidateEmail)>();
 
         /// <summary>
         /// Dispose of the call client
@@ -119,7 +119,7 @@ namespace EchoBot.Bot
         public void Initialize()
         {
             _logger.LogInformation("Initializing Bot Service");
-            var name = this.GetType().Assembly.GetName().Name;
+            var name = this.GetType().Assembly.GetName().Name ?? "BotService";
             var builder = new CommunicationsClientBuilder(
                 name,
                 _settings.AadAppId,
@@ -277,9 +277,9 @@ namespace EchoBot.Bot
             {
                 // Store the call details before creating the call
                 _pendingCallDetails[joinParams.ChatInfo.ThreadId] = (
-                    joinCallBody.InterviewStartTime,
-                    joinCallBody.InterviewEndTime,
-                    joinCallBody.CandidateEmail
+                    joinCallBody.InterviewStartTime ?? 0,
+                    joinCallBody.InterviewEndTime ?? 0,
+                    joinCallBody.CandidateEmail ?? string.Empty
                 );
 
                 var statefulCall = await this.Client.Calls().AddAsync(joinParams, scenarioId).ConfigureAwait(false);
@@ -421,7 +421,7 @@ namespace EchoBot.Bot
                 // Try to get the pending call details
                 var (startTime, endTime, candidateEmail) = _pendingCallDetails.TryGetValue(threadId, out var details) 
                     ? details 
-                    : (null, null, null);
+                    : (0, 0, string.Empty);
 
                 // Remove from pending details since we're handling it now
                 _pendingCallDetails.Remove(threadId);

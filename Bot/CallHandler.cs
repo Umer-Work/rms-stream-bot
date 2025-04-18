@@ -171,7 +171,7 @@ namespace EchoBot.Bot
                 {
                     Console.WriteLine($"[CallHandler] Sending interview_ended event for interview");
                     var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_ended", _interviewStartTime.Value, endTime);
+                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("interview_ended", _interviewStartTime.Value, endTime);
                 }
 
                 if (BotMediaStream != null)

@@ -25,7 +25,7 @@ namespace EchoBot.Models
         /// </summary>
         /// <value>The join URL.</value>
         [JsonPropertyName("joinURL")]
-        public string JoinUrl { get; set; }
+        public string JoinUrl { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the meeting start time in Unix timestamp format (optional)
@@ -43,13 +43,13 @@ namespace EchoBot.Models
         /// Gets or sets the meeting ID
         /// </summary>
         [JsonPropertyName("InterviewId")]
-        public string InterviewId { get; set; }
+        public string InterviewId { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the company ID
         /// </summary>
         [JsonPropertyName("CompanyId")]
-        public string CompanyId { get; set; }
+        public string CompanyId { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets or sets the candidate's email address (optional)
@@ -61,7 +61,7 @@ namespace EchoBot.Models
         /// Gets or sets the MOATS questions
         /// </summary>
         [JsonPropertyName("VistaQuestions")]
-        public VISTAQuestions VistaQuestions { get; set; }
+        public VISTAQuestions VistaQuestions { get; set; } = new VISTAQuestions();
 
         /// <summary>
         /// Gets or sets the display name.

@@ -1,4 +1,4 @@
-﻿using Microsoft.Graph;
+using Microsoft.Graph;
 using Microsoft.Graph.Communications.Common.Telemetry;
 using System.Net;
 using System.Runtime.CompilerServices;
@@ -23,9 +23,9 @@ namespace EchoBot.Util
         public static async Task ForgetAndLogExceptionAsync(
             this Task task,
             IGraphLogger logger,
-            string description = null,
-            [CallerMemberName] string memberName = null,
-            [CallerFilePath] string filePath = null,
+            string description = "",
+            [CallerMemberName] string memberName = "",
+            [CallerFilePath] string filePath = "",
             [CallerLineNumber] int lineNumber = 0)
         {
             try

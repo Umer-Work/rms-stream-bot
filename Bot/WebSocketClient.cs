@@ -18,8 +18,8 @@ namespace EchoBot.Bot
         private readonly string _jwtSecret;
         private readonly string _companyId;
         private readonly ILogger _logger;
-        private ClientWebSocket _webSocket;
-        private CancellationTokenSource _cancellationTokenSource;
+        private ClientWebSocket _webSocket = new ClientWebSocket();
+        private CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private bool _isConnected;
 
         // Store interview details
@@ -34,28 +34,28 @@ namespace EchoBot.Bot
 
         public bool IsConnected => _isConnected && _webSocket?.State == WebSocketState.Open;
 
-        public event EventHandler ConnectionClosed;
+        public event EventHandler? ConnectionClosed;
 
         public WebSocketClient(
             string serverUrl,
             string jwtSecret,
             string companyId,
             ILogger logger,
-            string interviewId = null,
+            string interviewId = "",
             long? interviewStartTime = null,
             long? interviewEndTime = null,
-            string candidateEmail = null,
-            VISTAQuestions vistaQuestions = null)
-      {
+            string candidateEmail = "",
+            VISTAQuestions? vistaQuestions = null)
+        {
             _serverUrl = serverUrl;
             _jwtSecret = jwtSecret;
             _companyId = companyId;
             _logger = logger;
-            _interviewId = interviewId;
+            _interviewId = interviewId ?? string.Empty;
             _interviewStartTime = interviewStartTime;
             _interviewEndTime = interviewEndTime;
-            _candidateEmail = candidateEmail;
-            _vistaQuestions = vistaQuestions;
+            _candidateEmail = candidateEmail ?? string.Empty;
+            _vistaQuestions = vistaQuestions ?? new VISTAQuestions();
         }
 
         private string GenerateJwtToken()
@@ -85,17 +85,15 @@ namespace EchoBot.Bot
         {
             try
             {
-                _webSocket = new ClientWebSocket();
                 _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-                _cancellationTokenSource = new CancellationTokenSource();
                 var uri = new Uri(_serverUrl);
 
                 // Generate JWT token
-                var token = GenerateJwtToken();
+                var token = GenerateJwtToken() ?? string.Empty;
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
                 
                 Console.WriteLine($"Connecting to WebSocket at {uri}");
-                await _webSocket.ConnectAsync(uri, _cancellationTokenSource.Token);
+                await _webSocket.ConnectAsync(uri, _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
                 _isConnected = true;
                 Console.WriteLine("WebSocket connected successfully");
 
@@ -124,7 +122,7 @@ namespace EchoBot.Bot
                     interviewStartTime = _interviewStartTime,
                     interviewEndTime = _interviewEndTime,
                     candidateEmail = _candidateEmail ?? "",
-                    vistaQuestions = _vistaQuestions ?? new VISTAQuestions()
+                    vistaQuestions = _vistaQuestions
                 };
 
                 var message = System.Text.Json.JsonSerializer.Serialize(payload);
@@ -133,7 +131,7 @@ namespace EchoBot.Bot
                     new ArraySegment<byte>(messageBytes),
                     WebSocketMessageType.Text,
                     true,
-                    _cancellationTokenSource.Token);
+                    _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
 
                Console.WriteLine($"Sent meeting details event for meeting {_interviewId}");
             }
@@ -191,7 +189,7 @@ namespace EchoBot.Bot
                     new ArraySegment<byte>(messageBytes),
                     WebSocketMessageType.Text,
                     true,
-                    _cancellationTokenSource.Token);
+                    _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -244,7 +242,7 @@ namespace EchoBot.Bot
                     new ArraySegment<byte>(messageBytes),
                     WebSocketMessageType.Text,
                     true,
-                    _cancellationTokenSource.Token);
+                    _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -282,7 +280,7 @@ namespace EchoBot.Bot
                     new ArraySegment<byte>(messageBytes),
                     WebSocketMessageType.Text,
                     true,
-                    _cancellationTokenSource.Token);
+                    _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -325,7 +323,7 @@ namespace EchoBot.Bot
                 new ArraySegment<byte>(messageBytes),
                 WebSocketMessageType.Text,
                 true,
-                _cancellationTokenSource.Token);
+                _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
         }
 
         public async Task StartReceivingAsync()
@@ -337,14 +335,14 @@ namespace EchoBot.Bot
                 {
                     var result = await _webSocket.ReceiveAsync(
                         new ArraySegment<byte>(buffer),
-                        _cancellationTokenSource.Token);
+                        _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         await _webSocket.CloseAsync(
                             WebSocketCloseStatus.NormalClosure,
                             string.Empty,
-                            _cancellationTokenSource.Token);
+                            _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
                         _isConnected = false;
                         OnConnectionClosed();
                     }
@@ -394,7 +392,7 @@ namespace EchoBot.Bot
                     new ArraySegment<byte>(messageBytes),
                     WebSocketMessageType.Text,
                     true,
-                    _cancellationTokenSource.Token);
+                    _cancellationTokenSource != null ? _cancellationTokenSource.Token : CancellationToken.None);
                 Console.WriteLine($"Sent talk_alert event: {jsonString}");
             }
             catch (Exception ex)

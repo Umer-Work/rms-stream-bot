@@ -1,4 +1,4 @@
-﻿// ***********************************************************************
+// ***********************************************************************
 // Assembly         : EchoBot.Controllers
 // Author           : JasonTheDeveloper
 // Created          : 09-07-2020
@@ -7,7 +7,7 @@
 // Last Modified On : 02-28-2022
 // ***********************************************************************
 // <copyright file="JoinCallController.cs" company="Microsoft">
-//     Copyright ©  2023
+//     Copyright  2023
 // </copyright>
 // <summary></summary>
 // ***********************************************************************
@@ -45,10 +45,25 @@ namespace EchoBot.Controllers
         [HttpPost]
         public async Task<IActionResult> JoinCallAsync([FromBody] JoinCallBody joinCallBody)
         {
+            if (joinCallBody == null)
+            {
+                return BadRequest("JoinCallBody cannot be null.");
+            }
+
             try
             {
                 _logger.LogInformation("JOIN CALL");
                 var call = await _botService.JoinCallAsync(joinCallBody).ConfigureAwait(false);
+
+                if (call == null)
+                {
+                    return Problem(detail: "Call object is null.", statusCode: (int)HttpStatusCode.InternalServerError, title: "Call not found");
+                }
+
+                if (call.Resource?.ChatInfo?.ThreadId == null)
+                {
+                    return Problem(detail: "ThreadId is null.", statusCode: (int)HttpStatusCode.InternalServerError, title: "ThreadId not found");
+                }
 
                 var values = new
                 {

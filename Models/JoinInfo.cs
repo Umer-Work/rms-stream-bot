@@ -1,4 +1,4 @@
-﻿// ***********************************************************************
+// ***********************************************************************
 // Assembly         : EchoBot.Models
 // Author           : JasonTheDeveloper
 // Created          : 09-07-2020
@@ -7,7 +7,7 @@
 // Last Modified On : 10-27-2023
 // ***********************************************************************
 // <copyright file="JoinInfo.cs" company="Microsoft">
-//     Copyright ©  2023
+//     Copyright  2023
 // </copyright>
 // <summary></summary>
 // ***********************************************************************
@@ -61,19 +61,19 @@ namespace EchoBot.Models
 
                 var chatInfo = new ChatInfo
                 {
-                    ThreadId = match.Groups["thread"].Value,
-                    MessageId = match.Groups["message"].Value,
-                    ReplyChainMessageId = ctxt.MessageId,
+                    ThreadId = match.Groups["thread"]?.Value ?? string.Empty,
+                    MessageId = match.Groups["message"]?.Value ?? string.Empty,
+                    ReplyChainMessageId = ctxt.MessageId ?? string.Empty,
                 };
 
                 var meetingInfo = new OrganizerMeetingInfo
                 {
                     Organizer = new IdentitySet
                     {
-                        User = new Identity { Id = ctxt.Oid },
+                        User = new Identity { Id = ctxt.Oid ?? string.Empty },
                     },
                 };
-                meetingInfo.Organizer.User.SetTenantId(ctxt.Tid);
+                meetingInfo.Organizer.User.SetTenantId(ctxt.Tid ?? string.Empty);
 
                 return (chatInfo, meetingInfo);
             }

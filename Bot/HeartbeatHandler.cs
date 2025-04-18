@@ -1,4 +1,4 @@
-﻿// ***********************************************************************
+// ***********************************************************************
 // Assembly         : EchoBot.Services
 // Author           : JasonTheDeveloper
 // Created          : 09-07-2020
@@ -7,7 +7,7 @@
 // Last Modified On : 10-27-2023
 // ***********************************************************************
 // <copyright file="HeartbeatHandler.cs" company="Microsoft">
-//     Copyright ©  2020
+//     Copyright  2020
 // </copyright>
 // <summary></summary>
 // ***********************************************************************>
@@ -66,7 +66,7 @@ namespace EchoBot.Bot
         /// </summary>
         /// <param name="sender">The sender.</param>
         /// <param name="args">The elapsed event args.</param>
-        private void HeartbeatDetected(object sender, ElapsedEventArgs args)
+        private void HeartbeatDetected(object? sender, ElapsedEventArgs args)
         {
             var task = $"{this.GetType().FullName}.{nameof(this.HeartbeatAsync)}(args)";
             this.GraphLogger.Verbose($"Starting running task: " + task);
@@ -74,4 +74,3 @@ namespace EchoBot.Bot
         }
     }
 }
-

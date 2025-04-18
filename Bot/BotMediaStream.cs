@@ -36,9 +36,9 @@ namespace EchoBot.Bot
     {
         public class UserDetails
         {
-            public string Id { get; set; }
-            public string DisplayName { get; set; }
-            public string Email { get; set; }
+            public string Id { get; set; } = string.Empty;
+            public string DisplayName { get; set; } = string.Empty;
+            public string Email { get; set; } = string.Empty;
         }
 
         private AppSettings _settings;
@@ -118,9 +118,9 @@ namespace EchoBot.Bot
 
         private class ParticipantInfo
         {
-            public string UserId { get; set; }
-            public string DisplayName { get; set; }
-            public string Email { get; set; }
+            public string UserId { get; set; } = string.Empty;
+            public string DisplayName { get; set; } = string.Empty;
+            public string Email { get; set; } = string.Empty;
         }
 
         private Dictionary<string, ParticipantInfo> _participantInfo = new Dictionary<string, ParticipantInfo>();
@@ -329,7 +329,7 @@ namespace EchoBot.Bot
         /// </summary>
         /// <param name="sender">The sender.</param>
         /// <param name="e">The audio media received arguments.</param>
-        private async void OnAudioMediaReceived(object sender, AudioMediaReceivedEventArgs e)
+        private async void OnAudioMediaReceived(object? sender, AudioMediaReceivedEventArgs e)
         {
             // Console.WriteLine($"[OnAudioMediaReceived] Called at {DateTime.Now:HH:mm:ss.fff}");
             if (!_isWebSocketConnected) {
@@ -633,7 +633,7 @@ namespace EchoBot.Bot
             }
         }
 
-        private async void OnVideoMediaReceived(object sender, VideoMediaReceivedEventArgs e)
+        private async void OnVideoMediaReceived(object? sender, VideoMediaReceivedEventArgs e)
         {
             if (!_isWebSocketConnected) 
             {
@@ -667,7 +667,7 @@ namespace EchoBot.Bot
             }
         }
 
-        private void WebSocketClient_ConnectionClosed(object sender, EventArgs e)
+        private void WebSocketClient_ConnectionClosed(object? sender, EventArgs e)
         {
             _isWebSocketConnected = false;
             _logger.LogWarning("WebSocket connection closed - audio/video streaming will be paused");

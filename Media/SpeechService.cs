@@ -27,7 +27,7 @@ namespace EchoBot.Media
         private readonly AudioOutputStream _audioOutputStream = AudioOutputStream.CreatePullStream();
 
         private readonly SpeechConfig _speechConfig;
-        private SpeechRecognizer _recognizer;
+        private SpeechRecognizer _recognizer = null!;
         private readonly SpeechSynthesizer _synthesizer;
         /// <summary>
         /// Initializes a new instance of the <see cref="SpeechService" /> class.
@@ -94,7 +94,7 @@ namespace EchoBot.Media
             }
         }
 
-        public event EventHandler<MediaStreamEventArgs> SendMediaBuffer;
+        public event EventHandler<MediaStreamEventArgs>? SendMediaBuffer;
 
         /// <summary>
         /// Ends this instance.

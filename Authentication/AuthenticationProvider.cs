@@ -1,4 +1,4 @@
-﻿// <copyright file="AuthenticationProvider.cs" company="Microsoft Corporation">
+// <copyright file="AuthenticationProvider.cs" company="Microsoft Corporation">
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 // </copyright>
@@ -58,7 +58,7 @@ namespace EchoBot.Authentication
         /// <summary>
         /// The open identifier configuration.
         /// </summary>
-        private OpenIdConnectConfiguration openIdConfiguration;
+        private OpenIdConnectConfiguration openIdConfiguration = null!;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AuthenticationProvider" /> class.
