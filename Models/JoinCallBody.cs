@@ -30,20 +30,20 @@ namespace EchoBot.Models
         /// <summary>
         /// Gets or sets the meeting start time in Unix timestamp format (optional)
         /// </summary>
-        [JsonPropertyName("MeetingStartTime")]
-        public long? MeetingStartTime { get; set; }
+        [JsonPropertyName("InterviewStartTime")]
+        public long? InterviewStartTime { get; set; }
 
         /// <summary>
         /// Gets or sets the meeting end time in Unix timestamp format (optional)
         /// </summary>
-        [JsonPropertyName("MeetingEndTime")]
-        public long? MeetingEndTime { get; set; }
+        [JsonPropertyName("InterviewEndTime")]
+        public long? InterviewEndTime { get; set; }
 
         /// <summary>
         /// Gets or sets the meeting ID
         /// </summary>
-        [JsonPropertyName("MeetingId")]
-        public string MeetingId { get; set; }
+        [JsonPropertyName("InterviewId")]
+        public string InterviewId { get; set; }
 
         /// <summary>
         /// Gets or sets the company ID
@@ -60,8 +60,8 @@ namespace EchoBot.Models
         /// <summary>
         /// Gets or sets the MOATS questions
         /// </summary>
-        [JsonPropertyName("MOATSQuestions")]
-        public MOATSQuestions MOATSQuestions { get; set; }
+        [JsonPropertyName("VistaQuestions")]
+        public VISTAQuestions VistaQuestions { get; set; }
 
         /// <summary>
         /// Gets or sets the display name.

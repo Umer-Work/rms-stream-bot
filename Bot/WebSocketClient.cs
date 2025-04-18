@@ -22,12 +22,12 @@ namespace EchoBot.Bot
         private CancellationTokenSource _cancellationTokenSource;
         private bool _isConnected;
 
-        // Store meeting details
-        private string _meetingId;
-        private long? _meetingStartTime;
-        private long? _meetingEndTime;
+        // Store interview details
+        private string _interviewId;
+        private long? _interviewStartTime;
+        private long? _interviewEndTime;
         private string _candidateEmail;
-        private MOATSQuestions _moatsQuestions;
+        private VISTAQuestions _vistaQuestions;
 
         // Video streaming related fields
         private int _frameIndex = 0;
@@ -41,21 +41,21 @@ namespace EchoBot.Bot
             string jwtSecret,
             string companyId,
             ILogger logger,
-            string meetingId = null,
-            long? meetingStartTime = null,
-            long? meetingEndTime = null,
+            string interviewId = null,
+            long? interviewStartTime = null,
+            long? interviewEndTime = null,
             string candidateEmail = null,
-            MOATSQuestions moatsQuestions = null)
-        {
+            VISTAQuestions vistaQuestions = null)
+      {
             _serverUrl = serverUrl;
             _jwtSecret = jwtSecret;
             _companyId = companyId;
             _logger = logger;
-            _meetingId = meetingId;
-            _meetingStartTime = meetingStartTime;
-            _meetingEndTime = meetingEndTime;
+            _interviewId = interviewId;
+            _interviewStartTime = interviewStartTime;
+            _interviewEndTime = interviewEndTime;
             _candidateEmail = candidateEmail;
-            _moatsQuestions = moatsQuestions;
+            _vistaQuestions = vistaQuestions;
         }
 
         private string GenerateJwtToken()
@@ -119,12 +119,12 @@ namespace EchoBot.Bot
             {
                 var payload = new
                 {
-                    type = "meeting_details",
-                    meetingId = _meetingId,
-                    meetingStartTime = _meetingStartTime,
-                    meetingEndTime = _meetingEndTime,
+                    type = "interview_details",
+                    interviewId = _interviewId,
+                    interviewStartTime = _interviewStartTime,
+                    interviewEndTime = _interviewEndTime,
                     candidateEmail = _candidateEmail ?? "",
-                    moatsQuestions = _moatsQuestions ?? new MOATSQuestions()
+                    vistaQuestions = _vistaQuestions ?? new VISTAQuestions()
                 };
 
                 var message = System.Text.Json.JsonSerializer.Serialize(payload);
@@ -135,7 +135,7 @@ namespace EchoBot.Bot
                     true,
                     _cancellationTokenSource.Token);
 
-                Console.WriteLine($"Sent meeting details event for meeting {_meetingId}");
+               Console.WriteLine($"Sent meeting details event for meeting {_interviewId}");
             }
             catch (Exception ex)
             {
@@ -363,6 +363,48 @@ namespace EchoBot.Bot
                 _isConnected = false;
                 OnConnectionClosed();
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Sends a talk_alert event to the WebSocket server.
+        /// </summary>
+        /// <param name="alertPayload">The payload object containing talk alert details.</param>
+        public async Task SendTalkAlertEventAsync(object alertPayload)
+        {
+            if (!_isConnected || _webSocket.State != WebSocketState.Open)
+            {
+                Console.WriteLine("Cannot send talk_alert event - WebSocket is not connected");
+                return;
+            }
+
+            try
+            {
+                // Ensure type is set to talk_alert if not present
+                var payloadWithType = alertPayload;
+                if (alertPayload is not null && !alertPayload.GetType().GetProperty("type")?.GetValue(alertPayload)?.Equals("talk_alert") == true)
+                {
+                    // If type is not set, wrap the payload
+                    payloadWithType = new { type = "talk_ratio_alert", data = alertPayload };
+                }
+                var jsonString = System.Text.Json.JsonSerializer.Serialize(payloadWithType);
+                var messageBytes = Encoding.UTF8.GetBytes(jsonString);
+
+                await _webSocket.SendAsync(
+                    new ArraySegment<byte>(messageBytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    _cancellationTokenSource.Token);
+                Console.WriteLine($"Sent talk_alert event: {jsonString}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending talk_alert event: {ex.Message}");
+                if (_webSocket.State != WebSocketState.Open)
+                {
+                    _isConnected = false;
+                    OnConnectionClosed();
+                }
             }
         }
 

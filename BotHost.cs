@@ -100,7 +100,7 @@ namespace EchoBot
 
                 builder.Services.PostConfigure<AppSettings>(options =>
                 {
-                    options.BotInstanceExternalPort = 443;
+                    options.BotInstanceExternalPort = appSettings.BotInstanceExternalPort;
                     options.BotInternalPort = appSettings.BotCallingInternalPort;
 
                 });

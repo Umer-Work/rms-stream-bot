@@ -1,18 +1,18 @@
 namespace EchoBot.Models
 {
-    public class MOATSQuestion
+    public class VISTAQuestion
     {
         public int Index { get; set; }
         public string Question { get; set; }
         public bool IsMark { get; set; }
     }
 
-    public class MOATSQuestions
+    public class VISTAQuestions
     {
-        public MOATSQuestion Motivation { get; set; }
-        public MOATSQuestion Opportunity { get; set; }
-        public MOATSQuestion Availability { get; set; }
-        public MOATSQuestion Technical { get; set; }
-        public MOATSQuestion Salary { get; set; }
+        public VISTAQuestion Vision { get; set; }
+        public VISTAQuestion Interest { get; set; }
+        public VISTAQuestion Salary { get; set; }
+        public VISTAQuestion Technical { get; set; }
+        public VISTAQuestion Availability { get; set; }
     }
 }

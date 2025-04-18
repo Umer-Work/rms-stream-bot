@@ -226,16 +226,16 @@ namespace EchoBot.Bot
                     throw new InvalidOperationException("WebSocket JWT secret is not configured");
                 }
 
-                _webSocketClient = new WebSocketClient(
+                   _webSocketClient = new WebSocketClient(
                     _settings.WebSocketServerUrl, 
                     _settings.WebSocketJwtSecret,
                     joinCallBody.CompanyId,
                     _logger,
-                    joinCallBody.MeetingId,
-                    joinCallBody.MeetingStartTime,
-                    joinCallBody.MeetingEndTime,
+                    joinCallBody.InterviewId,
+                    joinCallBody.InterviewStartTime,
+                    joinCallBody.InterviewEndTime,
                     joinCallBody.CandidateEmail,
-                    joinCallBody.MOATSQuestions
+                    joinCallBody.VistaQuestions
                 );
                 _webSocketClient.ConnectionClosed += WebSocketClient_ConnectionClosed;
             }
@@ -277,8 +277,8 @@ namespace EchoBot.Bot
             {
                 // Store the call details before creating the call
                 _pendingCallDetails[joinParams.ChatInfo.ThreadId] = (
-                    joinCallBody.MeetingStartTime,
-                    joinCallBody.MeetingEndTime,
+                    joinCallBody.InterviewStartTime,
+                    joinCallBody.InterviewEndTime,
                     joinCallBody.CandidateEmail
                 );
 

@@ -122,5 +122,10 @@ namespace EchoBot
         /// </summary>
         [Required]
         public string MediaDnsName { get; set; }
+
+        /// <summary>
+        /// Default 5 minutes (window for speaking time monitoring)
+        /// </summary>
+        public int SpeakingTimeWindowMinutes { get; set; } = 5;
     }
 }

@@ -43,8 +43,8 @@ namespace EchoBot.Bot
         private readonly ILogger _logger;
         private readonly AppSettings _settings;
 
-        private long? _meetingStartTime;
-        private long? _meetingEndTime;
+        private long? _interviewStartTime;
+        private long? _interviewEndTime;
         private string? _candidateEmail;
 
         private string? subscribedParticipantId = null;
@@ -56,16 +56,16 @@ namespace EchoBot.Bot
         /// <param name="settings">The settings.</param>
         /// <param name="logger"></param>
         /// <param name="webSocketClient">WebSocket client instance</param>
-        /// <param name="meetingStartTime">Optional meeting start time</param>
-        /// <param name="meetingEndTime">Optional meeting end time</param>
+        /// <param name="interviewStartTime">Optional interview start time</param>
+        /// <param name="interviewEndTime">Optional interview end time</param>
         /// <param name="candidateEmail">Optional candidate email</param>
         public CallHandler(
             ICall statefulCall,
             AppSettings settings,
             ILogger logger,
             WebSocketClient webSocketClient,
-            long? meetingStartTime = null,
-            long? meetingEndTime = null,
+            long? interviewStartTime = null,
+            long? interviewEndTime = null,
             string? candidateEmail = null
         )
             : base(TimeSpan.FromMinutes(10), statefulCall?.GraphLogger)
@@ -73,8 +73,8 @@ namespace EchoBot.Bot
             // Console.WriteLine($"[CallHandler] Initializing for call {statefulCall.Id}");
             this.Call = statefulCall;
             this._settings = settings;
-            this._meetingStartTime = meetingStartTime;
-            this._meetingEndTime = meetingEndTime;
+            this._interviewStartTime = interviewStartTime;
+            this._interviewEndTime = interviewEndTime;
             this._candidateEmail = candidateEmail;
             
             // Subscribe to call updates first
@@ -105,8 +105,8 @@ namespace EchoBot.Bot
                 settings, 
                 this.Call, 
                 webSocketClient,
-                this._meetingStartTime, 
-                this._meetingEndTime, 
+                this._interviewStartTime, 
+                this._interviewEndTime, 
                 this._candidateEmail
             );
         }
@@ -156,20 +156,22 @@ namespace EchoBot.Bot
             // Handle call establishment
             if (e.OldResource.State != CallState.Established && e.NewResource.State == CallState.Established)
             {
-                _meetingStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                // No need to send meeting_started event as we already sent meeting_details
+                _interviewStartTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                // No need to send interview_started event as we already sent interview_details
             }
 
             // Handle call termination
             if (e.NewResource.State == CallState.Terminated)
             {
                 Console.WriteLine($"[CallHandler] Call terminated. Reason: {e.NewResource.ResultInfo?.Message}");
+                Console.WriteLine($"[CallHandler] Interview start time: {_interviewStartTime.HasValue}");
                 
-                // Send meeting ended event with start and end times
-                if (_meetingStartTime.HasValue)
+                // Send interview ended event with start and end times
+                if (_interviewStartTime.HasValue)
                 {
+                    Console.WriteLine($"[CallHandler] Sending interview_ended event for interview");
                     var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_ended", _meetingStartTime.Value, endTime);
+                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("meeting_ended", _interviewStartTime.Value, endTime);
                 }
 
                 if (BotMediaStream != null)
@@ -466,6 +468,12 @@ namespace EchoBot.Bot
                 if (videoStream != null)
                 {
                     var msi = uint.Parse(videoStream.SourceId);
+                    // Skip invalid MSI (0xFFFFFFFF)
+                    if (msi == 0xFFFFFFFF)
+                    {
+                        Console.WriteLine($"[CallHandler] Ignoring invalid MSI {msi} (0xFFFFFFFF) for participant {participant.Id}, skipping video subscription.");
+                        return;
+                    }
                     Console.WriteLine($"[CallHandler] Subscribing to candidate video for participant {participant.Id} with MSI {msi}");
                     this.BotMediaStream.Subscribe(MediaType.Video, msi, VideoResolution.HD1080p);
                     subscribedParticipantId = participant.Id;
