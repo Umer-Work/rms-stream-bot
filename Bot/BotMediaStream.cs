@@ -26,6 +26,7 @@ using System.Text.Json;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 using System.Collections;
+using System.Collections.Generic;
 
 namespace EchoBot.Bot
 {
@@ -221,23 +222,79 @@ namespace EchoBot.Bot
             return participants;
         }
 
+        private async Task AppendToAudioTodayFile(string jsonData)
+        {
+            var filePath = Path.Combine("rawData", $"audio_data_{DateTime.Now:yyyy-MM-dd}.txt");
+            lock (_fileLock)
+            {
+                // Ensure each JSON object is on a new line
+                File.AppendAllText(filePath, jsonData + Environment.NewLine);
+            }
+        }
+
+        /// <summary>
+        /// Sends a meeting ended event via WebSocket before shutting down.
+        /// </summary>
+        /// <returns>A task that completes when the meeting ended event has been sent.</returns>
+        public async Task SendMeetingEndedEventAsync()
+        {
+            try
+            {
+                // Use interlocked to ensure we only send this event once
+                if (Interlocked.CompareExchange(ref this._meetingEndedEventSent, 1, 0) == 1)
+                {
+                    Console.WriteLine("[BotMediaStream] Meeting ended event already sent, skipping");
+                    return;
+                }
+
+                if (_isWebSocketConnected && _webSocketClient != null)
+                {
+                    Console.WriteLine("[BotMediaStream] Sending meeting_ended event before shutdown");
+                    var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    await _webSocketClient.SendMeetingEventAsync("meeting_ended", 
+                        _meetingStartTime.GetValueOrDefault(DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeSeconds()), 
+                        endTime);
+                    
+                    // Small delay to ensure the message has time to be sent
+                    await Task.Delay(500);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error sending meeting_ended event: {ex.Message}");
+            }
+        }
+
+        // Flag to track if meeting ended event has been sent
+        private int _meetingEndedEventSent = 0;
+
         /// <summary>
         /// Shut down.
         /// </summary>
         /// <returns><see cref="Task" />.</returns>
         public async Task ShutdownAsync()
         {
-            if (Interlocked.CompareExchange(ref this.shutdown, 1, 1) == 1)
+            // Use interlocked to ensure we only shut down once
+            if (Interlocked.CompareExchange(ref this.shutdown, 1, 0) == 1)
             {
+                Console.WriteLine("[BotMediaStream] Shutdown already in progress, skipping");
                 return;
             }
+
+            Console.WriteLine("[BotMediaStream] Starting graceful shutdown");
+
+            // Make local copies of references that we'll use, to prevent race conditions
+            var localVideoSocket = videoSocket;
+            var localAudioSocket = _audioSocket;
+            var localAudioVideoPlayer = audioVideoFramePlayer;
+            var localWebSocketClient = _webSocketClient;
 
             // First unsubscribe from video socket to stop video streaming
             try
             {
-                if (videoSocket != null)
+                if (localVideoSocket != null)
                 {
-                    videoSocket.Unsubscribe();
+                    localVideoSocket.Unsubscribe();
                     Console.WriteLine($"[BotMediaStream] Unsubscribed from video socket during shutdown");
                 }
             }
@@ -246,38 +303,97 @@ namespace EchoBot.Bot
                 Console.WriteLine($"[BotMediaStream] Error unsubscribing from video socket during shutdown: {ex.Message}");
             }
 
-            await this.startVideoPlayerCompleted.Task.ConfigureAwait(false);
+            try
+            {
+                // Ensure we don't wait forever for the video player
+                var timeoutTask = Task.Delay(2000);  // 2 second timeout
+                var completedTask = await Task.WhenAny(this.startVideoPlayerCompleted.Task, timeoutTask).ConfigureAwait(false);
+                
+                if (completedTask == timeoutTask)
+                {
+                    Console.WriteLine("[BotMediaStream] Timed out waiting for video player completion");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error waiting for video player completion: {ex.Message}");
+            }
 
             // Clear video states
             _participantVideoState.Clear();
 
-            // unsubscribe
-            if (this._audioSocket != null)
+            // unsubscribe from audio events
+            if (localAudioSocket != null)
             {
-                this._audioSocket.AudioSendStatusChanged -= this.OnAudioSendStatusChanged;
+                try
+                {
+                    localAudioSocket.AudioSendStatusChanged -= this.OnAudioSendStatusChanged;
+                    Console.WriteLine("[BotMediaStream] Unsubscribed from audio events");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[BotMediaStream] Error unsubscribing from audio events: {ex.Message}");
+                }
             }
 
             // shutting down the players
-            if (this.audioVideoFramePlayer != null)
+            if (localAudioVideoPlayer != null)
             {
-                await this.audioVideoFramePlayer.ShutdownAsync().ConfigureAwait(false);
+                try
+                {
+                    await localAudioVideoPlayer.ShutdownAsync().ConfigureAwait(false);
+                    Console.WriteLine("[BotMediaStream] Audio/video player shutdown complete");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[BotMediaStream] Error shutting down audio/video player: {ex.Message}");
+                }
             }
 
             // make sure all the audio and video buffers are disposed
-            foreach (var audioMediaBuffer in this.audioMediaBuffers)
+            try
             {
-                audioMediaBuffer.Dispose();
+                List<AudioMediaBuffer> buffersCopy;
+                lock (this.audioMediaBuffers)
+                {
+                    buffersCopy = new List<AudioMediaBuffer>(this.audioMediaBuffers);
+                    this.audioMediaBuffers.Clear();
+                }
+
+                foreach (var audioMediaBuffer in buffersCopy)
+                {
+                    audioMediaBuffer.Dispose();
+                }
+
+                _logger.LogInformation($"disposed {buffersCopy.Count} audioMediaBuffers.");
+                Console.WriteLine($"[BotMediaStream] Disposed {buffersCopy.Count} audio media buffers");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error disposing audio buffers: {ex.Message}");
             }
 
-            _logger.LogInformation($"disposed {this.audioMediaBuffers.Count} audioMediaBUffers.");
+            // WebSocket should be the last thing we close
+            try
+            {
+                // Set WebSocket as disconnected
+                _isWebSocketConnected = false;
 
-            this.audioMediaBuffers.Clear();
+                // Dispose WebSocket client - don't call SendMeetingEndedEventAsync here
+                // as it's expected to be called by CallHandler before ShutdownAsync
+                if (localWebSocketClient != null)
+                {
+                    Console.WriteLine("[BotMediaStream] Disposing WebSocket client");
+                    localWebSocketClient.Dispose();
+                    // Can't set _webSocketClient to null as it's readonly
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[BotMediaStream] Error disposing WebSocket client: {ex.Message}");
+            }
 
-            // Set WebSocket as disconnected
-            _isWebSocketConnected = false;
-
-            // Dispose WebSocket client
-            _webSocketClient?.Dispose();
+            Console.WriteLine("[BotMediaStream] Graceful shutdown completed");
         }
 
         /// <summary>
@@ -329,240 +445,278 @@ namespace EchoBot.Bot
         /// </summary>
         /// <param name="sender">The sender.</param>
         /// <param name="e">The audio media received arguments.</param>
-        private async void OnAudioMediaReceived(object? sender, AudioMediaReceivedEventArgs e)
-        {
-            // Console.WriteLine($"[OnAudioMediaReceived] Called at {DateTime.Now:HH:mm:ss.fff}");
-            if (!_isWebSocketConnected) {
-                Console.WriteLine("[OnAudioMediaReceived] WebSocket not connected, returning early.");
-                return;
-            }
-            // Console.WriteLine("Audio Media Received: " + JsonConvert.SerializeObject(e, Formatting.Indented));
-
-            if (e.Buffer.UnmixedAudioBuffers != null)
+            private async void OnAudioMediaReceived(object? sender, AudioMediaReceivedEventArgs e)
             {
-                foreach (var buffer in e.Buffer.UnmixedAudioBuffers)
+                // Console.WriteLine($"[OnAudioMediaReceived] Called at {DateTime.Now:HH:mm:ss.fff}");
+                if (!_isWebSocketConnected) {
+                    Console.WriteLine("[OnAudioMediaReceived] WebSocket not connected, returning early.");
+                    return;
+                }
+                // Console.WriteLine("Audio Media Received: " + JsonConvert.SerializeObject(e, Formatting.Indented));
+
+                if (e.Buffer.UnmixedAudioBuffers != null)
                 {
-                    var length = buffer.Length;
-                    var data = new byte[length];
-                    Marshal.Copy(buffer.Data, data, 0, (int)length);
-                    
-                    var speakerId = buffer.ActiveSpeakerId.ToString();
-                    var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    
-                    if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
+                    foreach (var buffer in e.Buffer.UnmixedAudioBuffers)
                     {
-                        await ProcessAndSendBufferedAudio(_currentSpeakerId);
-                    }
-
-                    // Initialize buffer list for new speaker if needed
-                    if (!_speakerBuffers.ContainsKey(speakerId))
-                    {
-                        _speakerBuffers[speakerId] = new List<(byte[] buffer, long timestamp)>();
-                    }
-
-                    // Add current buffer and timestamp to speaker's buffer list
-                    _speakerBuffers[speakerId].Add((data, currentTimestamp));
-                    _currentSpeakerId = speakerId;
-                    _lastBufferTime = DateTime.Now;
-
-                    // === Real-time panelist alert logic: check on every buffer ===
-                    if (_participantInfo.TryGetValue(speakerId, out var info))
-                    {
-                        UserDetails userDetails = null;
-                        if (userDetailsMap != null && info.UserId != null)
-                        {
-                            userDetailsMap.TryGetValue(info.UserId, out userDetails);
-                        }
-                        var email = info.Email ?? userDetails?.Email ?? _candidateEmail ?? "";
-                        var displayName = info.DisplayName ?? "Unknown";
-                        var role = email == _candidateEmail ? "Candidate" : "Panelist";
-                        if (role == "Panelist")
-                        {
-                            // Calculate total speaking time in window, including ongoing segment
-                            long nowMs_panelist = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            var windowMinutes = _settings.SpeakingTimeWindowMinutes > 0 ? _settings.SpeakingTimeWindowMinutes : 5;
-                            long windowStart = nowMs_panelist - windowMinutes * 60 * 1000;
-                            // Gather all segments for this panelist
-                            if (_speakingSegments.TryGetValue(info.UserId, out var segments))
-                            {
-                                segments.RemoveAll(seg => seg.Item2 < windowStart);
-                            } else {
-                                segments = new List<(long, long)>();
-                                _speakingSegments[info.UserId] = segments;
-                            }
-                            // Update the end of the last segment to now (do not add a new segment on every buffer)
-                            if (segments.Count > 0)
-                            {
-                                // Update the end time of the ongoing segment
-                                segments[segments.Count - 1] = (segments.Last().Item1, nowMs_panelist);
-                            }
-                            else
-                            {
-                                // Start a new segment
-                                segments.Add((currentTimestamp, nowMs_panelist));
-                            }
-                            long totalMs = segments.Sum(seg => Math.Min(seg.Item2, nowMs_panelist) - Math.Max(seg.Item1, windowStart));
-                            if (totalMs >= 60 * 1000)
-                            {
-                                if (!_panelistAlertSent.TryGetValue(info.UserId, out long lastAlert) || lastAlert < windowStart)
-                                {
-                                    var panelist = userDetailsMap != null && info.UserId != null && userDetailsMap.TryGetValue(info.UserId, out var ud) ? ud : new UserDetails { Id = info.UserId, DisplayName = displayName, Email = email };
-                                    await SendPanelistSpokeAlert(panelist, totalMs, windowStart, nowMs_panelist);
-                                    _panelistAlertSent[info.UserId] = nowMs_panelist;
-                                }
-                            }
-                        }
-                    }
-                    // === END real-time panelist alert logic ===
-                    // Store the participant info for when we need to send
-                    if (!_participantInfo.ContainsKey(speakerId))
-                    {
-                        var participant = _call.Participants.SingleOrDefault(x => 
-                            x.Resource.IsInLobby == false && 
-                            x.Resource.MediaStreams.Any(y => y.SourceId == speakerId));
+                        var length = buffer.Length;
+                        var data = new byte[length];
+                        Marshal.Copy(buffer.Data, data, 0, (int)length);
                         
-                        if (participant != null)
+                        var speakerId = buffer.ActiveSpeakerId.ToString();
+                        var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        
+                        // Check if speaker has changed - if so, process previous speaker's audio
+                        if (_currentSpeakerId != null && _currentSpeakerId != speakerId)
                         {
-                            var identitySet = participant.Resource?.Info?.Identity;
-                            var identity = identitySet?.User;
-                            
+                            await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                        }
+                        
+                        // Initialize buffer list for new speaker if needed
+                        if (!_speakerBuffers.ContainsKey(speakerId))
+                        {
+                            _speakerBuffers[speakerId] = new List<(byte[] buffer, long timestamp)>();
+                        }
+
+                        // Add current buffer and timestamp to speaker's buffer list
+                        _speakerBuffers[speakerId].Add((data, currentTimestamp));
+                        _currentSpeakerId = speakerId;
+                        _lastBufferTime = DateTime.Now;
+
+                        // === Real-time panelist alert logic: check on every buffer ===
+                        if (_participantInfo.TryGetValue(speakerId, out var info))
+                        {
                             UserDetails userDetails = null;
-                            if (identity?.Id != null && userDetailsMap != null)
+                            if (userDetailsMap != null && info.UserId != null)
                             {
-                                userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                                userDetailsMap.TryGetValue(info.UserId, out userDetails);
                             }
-
-                            _participantInfo[speakerId] = new ParticipantInfo 
+                            var email = info.Email ?? userDetails?.Email ?? _candidateEmail ?? "";
+                            var displayName = info.DisplayName ?? "Unknown";
+                            var role = email == _candidateEmail ? "Candidate" : "Panelist";
+                            if (role == "Panelist")
                             {
-                                UserId = identity?.Id,
-                                DisplayName = identity?.DisplayName,
-                                Email = userDetails?.Email
-                            };
-                            // Store mapping from speakerId to email for role assignment
-                            if (!_speakerIdToEmail.ContainsKey(speakerId) && userDetails?.Email != null)
-                                _speakerIdToEmail[speakerId] = userDetails.Email;
-                        }
-                    }
-                }
-            }
-
-            try
-            {
-                if (!startVideoPlayerCompleted.Task.IsCompleted) { return; }
-
-                // Check for silence timeout and process any pending buffers
-                if (_currentSpeakerId != null)
-                {
-                    var timeSinceLastBuffer = DateTime.Now - _lastBufferTime;
-                    if (timeSinceLastBuffer.TotalMilliseconds > SILENCE_THRESHOLD_MS)
-                    {
-                        await ProcessAndSendBufferedAudio(_currentSpeakerId);
-                        _currentSpeakerId = null;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                this.GraphLogger.Error(ex);
-                _logger.LogError(ex, "OnAudioMediaReceived error");
-            }
-            finally
-            {
-                e.Buffer.Dispose();
-            }
-
-            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            // Now check panelist speaking time instead of candidate
-            await MonitorPanelistSpeakingAsync(nowMs);
-        }
-
-        private async Task ProcessAndSendBufferedAudio(string speakerId)
-        {
-            if (_speakerBuffers.ContainsKey(speakerId) && _speakerBuffers[speakerId].Count > 0)
-            {
-                try
-                {
-                    var bufferList = _speakerBuffers[speakerId];
-                    // Get the start timestamp in milliseconds
-                    var speakStartTimeMs = bufferList.First().timestamp;
-                    var speakEndTimeMs = bufferList.Last().timestamp;
-
-                    // Convert speak times from milliseconds to seconds
-                    var speakStartTimeSec = speakStartTimeMs / 1000;
-                    var speakEndTimeSec = speakEndTimeMs / 1000;
-
-                    // Combine all buffers for this speaker
-                    var totalLength = bufferList.Sum(b => b.buffer.Length);
-                    var combinedBuffer = new byte[totalLength];
-                    var offset = 0;
-
-                    foreach (var (buffer, _) in bufferList)
-                    {
-                        Buffer.BlockCopy(buffer, 0, combinedBuffer, offset, buffer.Length);
-                        offset += buffer.Length;
-                    }
-
-                    // Get participant info
-                    if (_participantInfo.TryGetValue(speakerId, out var info))
-                    {
-                        UserDetails userDetails = null;
-                        if (userDetailsMap != null && info.UserId != null)
-                        {
-                            userDetailsMap.TryGetValue(info.UserId, out userDetails);
-                        }
-
-                        var email = info.Email ?? userDetails?.Email ?? _candidateEmail ?? "";
-                        var displayName = info.DisplayName ?? "Unknown";
-                        var role = email == _candidateEmail ? "Candidate" : "Panelist";
-
-                        // Track panelist speaking segments for alerting
-                        if (role == "Panelist")
-                        {
-                            TrackSpeakerSegment(info.UserId, speakStartTimeMs, speakEndTimeMs);
-
-                            // Immediate alert check: sum all segments (including current)
-                            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                            var windowMinutes = _settings.SpeakingTimeWindowMinutes > 0 ? _settings.SpeakingTimeWindowMinutes : 5;
-                            long windowStart = nowMs - windowMinutes * 60 * 1000;
-                            if (_speakingSegments.TryGetValue(info.UserId, out var segments))
-                            {
-                                // Remove old segments
-                                segments.RemoveAll(seg => seg.Item2 < windowStart);
-                                // Add current segment if not already present (avoid double-counting)
-                                if (segments.Count == 0 || segments.Last().Item2 != speakEndTimeMs)
-                                    segments.Add((speakStartTimeMs, speakEndTimeMs));
-                                long totalMs = segments.Sum(seg => Math.Min(seg.Item2, nowMs) - Math.Max(seg.Item1, windowStart));
+                                // Calculate total speaking time in window, including ongoing segment
+                                long nowMs_panelist = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                var windowMinutes = _settings.SpeakingTimeWindowMinutes > 0 ? _settings.SpeakingTimeWindowMinutes : 5;
+                                long windowStart = nowMs_panelist - windowMinutes * 60 * 1000;
+                                // Gather all segments for this panelist
+                                if (_speakingSegments.TryGetValue(info.UserId, out var segments))
+                                {
+                                    segments.RemoveAll(seg => seg.Item2 < windowStart);
+                                } else {
+                                    segments = new List<(long, long)>();
+                                    _speakingSegments[info.UserId] = segments;
+                                }
+                                // Update the end of the last segment to now (do not add a new segment on every buffer)
+                                if (segments.Count > 0)
+                                {
+                                    // Update the end time of the ongoing segment
+                                    segments[segments.Count - 1] = (segments.Last().Item1, nowMs_panelist);
+                                }
+                                else
+                                {
+                                    // Start a new segment
+                                    segments.Add((currentTimestamp, nowMs_panelist));
+                                }
+                                long totalMs = segments.Sum(seg => Math.Min(seg.Item2, nowMs_panelist) - Math.Max(seg.Item1, windowStart));
                                 if (totalMs >= 60 * 1000)
                                 {
                                     if (!_panelistAlertSent.TryGetValue(info.UserId, out long lastAlert) || lastAlert < windowStart)
                                     {
-                                        // Find UserDetails for alert
                                         var panelist = userDetailsMap != null && info.UserId != null && userDetailsMap.TryGetValue(info.UserId, out var ud) ? ud : new UserDetails { Id = info.UserId, DisplayName = displayName, Email = email };
-                                        await SendPanelistSpokeAlert(panelist, totalMs, windowStart, nowMs);
-                                        _panelistAlertSent[info.UserId] = nowMs;
+                                        await SendPanelistSpokeAlert(panelist, totalMs, windowStart, nowMs_panelist);
+                                        _panelistAlertSent[info.UserId] = nowMs_panelist;
                                     }
                                 }
                             }
                         }
-                        await _webSocketClient.SendAudioDataAsync(
-                            combinedBuffer,
-                            email,
-                            displayName,
-                            speakStartTimeMs,
-                            speakEndTimeMs,
-                            role
-                        );
-                    }
+                        // === END real-time panelist alert logic ===
+                        // Store the participant info for when we need to send
+                        if (!_participantInfo.ContainsKey(speakerId))
+                        {
+                            var participant = _call.Participants.SingleOrDefault(x => 
+                                x.Resource.IsInLobby == false && 
+                                x.Resource.MediaStreams.Any(y => y.SourceId == speakerId));
+                            
+                            if (participant != null)
+                            {
+                                var identitySet = participant.Resource?.Info?.Identity;
+                                var identity = identitySet?.User;
+                                
+                                UserDetails userDetails = null;
+                                if (identity?.Id != null && userDetailsMap != null)
+                                {
+                                    userDetailsMap.TryGetValue(identity.Id, out userDetails);
+                                }
 
-                    // Clear the processed buffers to prevent duplication
-                    _speakerBuffers[speakerId].Clear();
+                                _participantInfo[speakerId] = new ParticipantInfo 
+                                {
+                                    UserId = identity?.Id,
+                                    DisplayName = identity?.DisplayName,
+                                    Email = userDetails?.Email
+                                };
+                                // Store mapping from speakerId to email for role assignment
+                                if (!_speakerIdToEmail.ContainsKey(speakerId) && userDetails?.Email != null)
+                                    _speakerIdToEmail[speakerId] = userDetails.Email;
+                            }
+                        }
+
+                        // Save data to file
+                        try 
+                        {
+                            Console.WriteLine($"Saving audio data for speakerId: {speakerId}");
+                            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+                            var audioInfo = new
+                            {
+                                Timestamp = timestamp,
+                                ActiveSpeakerId = buffer.ActiveSpeakerId,
+                                UserId = info?.UserId ?? null,
+                                AudioLength = length,
+                                AudioData = data
+                            };
+
+                            var jsonData = System.Text.Json.JsonSerializer.Serialize(audioInfo);
+                            await AppendToAudioTodayFile(jsonData);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error saving data to file: {ex.Message}");
+                            _logger.LogError(ex, "Error saving audio data to file");
+                        }
+                    }
+                }
+
+                try
+                {
+                    if (!startVideoPlayerCompleted.Task.IsCompleted) { return; }
+
+                    // Check for silence timeout and process any pending buffers
+                    if (_currentSpeakerId != null)
+                    {
+                        var timeSinceLastBuffer = DateTime.Now - _lastBufferTime;
+                        if (timeSinceLastBuffer.TotalMilliseconds > SILENCE_THRESHOLD_MS)
+                        {
+                            await ProcessAndSendBufferedAudio(_currentSpeakerId);
+                            _currentSpeakerId = null;
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing and sending buffered audio");
+                    this.GraphLogger.Error(ex);
+                    _logger.LogError(ex, "OnAudioMediaReceived error");
+                }
+                finally
+                {
+                    e.Buffer.Dispose();
+                }
+
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                // Now check panelist speaking time instead of candidate
+                await MonitorPanelistSpeakingAsync(nowMs);
+            }
+
+            private async Task ProcessAndSendBufferedAudio(string speakerId)
+            {
+                if (_speakerBuffers.ContainsKey(speakerId) && _speakerBuffers[speakerId].Count > 0)
+                {
+                    try
+                    {
+                        var bufferList = _speakerBuffers[speakerId];
+                        // Get the start timestamp in milliseconds
+                        var speakStartTimeMs = bufferList.First().timestamp;
+                        var speakEndTimeMs = bufferList.Last().timestamp;
+
+                        // Skip if the buffer is too small or represents a very short duration (likely silence)
+                        if (bufferList.Count < 2 || (speakEndTimeMs - speakStartTimeMs) < 100)
+                        {
+                            // Clear the buffer but don't send - it's too small to be meaningful
+                            _speakerBuffers[speakerId].Clear();
+                            return;
+                        }
+
+                        // Convert speak times from milliseconds to seconds
+                        var speakStartTimeSec = speakStartTimeMs / 1000;
+                        var speakEndTimeSec = speakEndTimeMs / 1000;
+
+                        // Combine all buffers for this speaker
+                        var totalLength = bufferList.Sum(b => b.buffer.Length);
+                        var combinedBuffer = new byte[totalLength];
+                        var offset = 0;
+
+                        foreach (var (buffer, _) in bufferList)
+                        {
+                            Buffer.BlockCopy(buffer, 0, combinedBuffer, offset, buffer.Length);
+                            offset += buffer.Length;
+                        }
+
+                        // Get participant info
+                        if (_participantInfo.TryGetValue(speakerId, out var info))
+                        {
+                            UserDetails userDetails = null;
+                            if (userDetailsMap != null && info.UserId != null)
+                            {
+                                userDetailsMap.TryGetValue(info.UserId, out userDetails);
+                            }
+
+                            var email = info.Email ?? userDetails?.Email ?? _candidateEmail ?? "";
+                            var displayName = info.DisplayName ?? "Unknown";
+                            var role = email == _candidateEmail ? "Candidate" : "Panelist";
+
+                            // Track panelist speaking segments for alerting
+                            if (role == "Panelist")
+                            {
+                                TrackSpeakerSegment(info.UserId, speakStartTimeMs, speakEndTimeMs);
+
+                                // Immediate alert check: sum all segments (including current)
+                                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                var windowMinutes = _settings.SpeakingTimeWindowMinutes > 0 ? _settings.SpeakingTimeWindowMinutes : 5;
+                                long windowStart = nowMs - windowMinutes * 60 * 1000;
+                                if (_speakingSegments.TryGetValue(info.UserId, out var segments))
+                                {
+                                    // Remove old segments
+                                    segments.RemoveAll(seg => seg.Item2 < windowStart);
+                                    // Add current segment if not already present (avoid double-counting)
+                                    if (segments.Count == 0 || segments.Last().Item2 != speakEndTimeMs)
+                                        segments.Add((speakStartTimeMs, speakEndTimeMs));
+                                    long totalMs = segments.Sum(seg => Math.Min(seg.Item2, nowMs) - Math.Max(seg.Item1, windowStart));
+                                    if (totalMs >= 60 * 1000)
+                                    {
+                                        if (!_panelistAlertSent.TryGetValue(info.UserId, out long lastAlert) || lastAlert < windowStart)
+                                        {
+                                            // Find UserDetails for alert
+                                            var panelist = userDetailsMap != null && info.UserId != null && userDetailsMap.TryGetValue(info.UserId, out var ud) ? ud : new UserDetails { Id = info.UserId, DisplayName = displayName, Email = email };
+                                            await SendPanelistSpokeAlert(panelist, totalMs, windowStart, nowMs);
+                                            _panelistAlertSent[info.UserId] = nowMs;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Log info about the audio being sent to help with debugging
+                            Console.WriteLine($"Sending {combinedBuffer.Length} bytes of audio from {displayName} ({email}), duration: {(speakEndTimeMs - speakStartTimeMs)}ms");
+                            
+                            await _webSocketClient.SendAudioDataAsync(
+                                combinedBuffer,
+                                email,
+                                displayName,
+                                speakStartTimeMs,
+                                speakEndTimeMs,
+                                role
+                            );
+                        }
+
+                        // Clear the processed buffers to prevent duplication - must do this regardless of success
+                        _speakerBuffers[speakerId].Clear();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing and sending buffered audio");
+                        // Still clear the buffers even on error to prevent memory growth
+                        _speakerBuffers[speakerId].Clear();
+                    }
                 }
             }
-        }
 
         private void TrackSpeakerSegment(string speakerId, long start, long end)
         {
@@ -654,7 +808,7 @@ namespace EchoBot.Bot
                 await _webSocketClient.SendVideoDataAsync(buffer, e.Buffer.VideoFormat, e.Buffer.OriginalVideoFormat);
           
                 // Log video frame details
-                Console.WriteLine($"[BotMediaStream] Received video frame: MSI={e.Buffer.MediaSourceId}, Format={e.Buffer.VideoFormat}, Size={buffer.Length} bytes");
+                // Console.WriteLine($"[BotMediaStream] Received video frame: MSI={e.Buffer.MediaSourceId}, Format={e.Buffer.VideoFormat}, Size={buffer.Length} bytes");
             }
             catch (Exception ex)
             {

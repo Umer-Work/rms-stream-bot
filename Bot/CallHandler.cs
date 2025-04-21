@@ -160,33 +160,33 @@ namespace EchoBot.Bot
                 // No need to send interview_started event as we already sent interview_details
             }
 
-            // Handle call termination
-            if (e.NewResource.State == CallState.Terminated)
+            // Handle call termination - only execute this block once when state changes to Terminated
+            if (e.OldResource.State != CallState.Terminated && e.NewResource.State == CallState.Terminated)
             {
                 Console.WriteLine($"[CallHandler] Call terminated. Reason: {e.NewResource.ResultInfo?.Message}");
-                Console.WriteLine($"[CallHandler] Interview start time: {_interviewStartTime.HasValue}");
                 
-                // Send interview ended event with start and end times
-                if (_interviewStartTime.HasValue)
+                try
                 {
-                    Console.WriteLine($"[CallHandler] Sending interview_ended event for interview");
-                    var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                    await BotMediaStream.WebSocketClient.SendMeetingEventAsync("interview_ended", _interviewStartTime.Value, endTime);
+                    // Capture reference to BotMediaStream to avoid race conditions
+                    var mediaStream = BotMediaStream;
+                    if (mediaStream != null)
+                    {
+                        // First send the meeting ended event while WebSocket is still available
+                        Console.WriteLine($"[CallHandler] Sending meeting ended event");
+                        await mediaStream.SendMeetingEndedEventAsync();
+                        
+                        // Add a short delay to ensure the message is sent
+                        await Task.Delay(100);
+                        
+                        // Then shut down the media stream properly
+                        Console.WriteLine($"[CallHandler] Shutting down media stream");
+                        await mediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
+                    }
                 }
-
-                if (BotMediaStream != null)
+                catch (Exception ex)
                 {
-                    Console.WriteLine($"[CallHandler] Shutting down media stream");
-                    await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
-                }
-            }
-
-            if ((e.OldResource.State == CallState.Established) && (e.NewResource.State == CallState.Terminated))
-            {
-                if (BotMediaStream != null)
-                {
-                    Console.WriteLine($"[CallHandler] Call terminated, shutting down media stream");
-                    await BotMediaStream.ShutdownAsync().ForgetAndLogExceptionAsync(GraphLogger);
+                    Console.WriteLine($"[CallHandler] Error during call termination: {ex.Message}");
+                    Console.WriteLine($"[CallHandler] Stack trace: {ex.StackTrace}");
                 }
             }
         }

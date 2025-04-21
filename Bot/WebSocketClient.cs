@@ -163,6 +163,7 @@ namespace EchoBot.Bot
 
         public async Task SendAudioDataAsync(byte[] audioData, string email, string displayName, long speakStartTime, long speakEndTime, string role)
         {
+            Console.WriteLine($"[SendAudioDataAsync] Sending audio data for {email} ({displayName})");
             if (!_isConnected || _webSocket.State != WebSocketState.Open)
             {
                 _logger.LogWarning("Cannot send audio data - WebSocket is not connected");
